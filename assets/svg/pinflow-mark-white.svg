@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  
+  
+  <defs><clipPath id="cgmk2"><circle cx="256.000" cy="256.000" r="158.720"></circle></clipPath></defs>
+  <circle cx="256.000" cy="256.000" r="158.720" fill="#FFFFFF"></circle>
+  <g clip-path="url(#cgmk2)">
+    <path d="M 97.280 211.558 L 186.163 211.558 L 256.000 281.395 L 325.837 211.558 L 414.720 211.558" fill="none" stroke="#6D28D9" stroke-width="34.918" stroke-linejoin="round" stroke-linecap="butt"></path>
+    <circle cx="256.000" cy="281.395" r="34.918" fill="#6D28D9"></circle>
+    <circle cx="256.000" cy="281.395" r="12.698" fill="#FFFFFF"></circle>
+  </g>
+</svg>

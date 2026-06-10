@@ -1,0 +1,82 @@
+# macOS
+.DS_Store
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+.env
+.env.local
+*.egg-info/
+dist/
+build/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+
+# Node / Vite
+node_modules/
+apps/desktop/dist/
+apps/desktop/.vite/
+*.log
+npm-debug.log*
+
+# Tauri
+apps/desktop/src-tauri/target/
+apps/desktop/src-tauri/Cargo.lock
+apps/desktop/src-tauri/gen/
+
+# Editor
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Claude Code per-project state (scheduled-task locks, etc.)
+.claude/
+
+# Local secrets
+*.local
+secrets.json
+
+# Pinflow local caches
+services/api/_easyeda_cache/
+.easyeda_cache/
+services/api/_components_cache/
+
+# Agent loop debug traces (scripts/trace_chat.py)
+services/api/_traces/
+
+# Schematic render screenshots (scripts/render_sch.py)
+services/api/_renders/
+
+# Scratch artifacts from debug/sanity scripts (test_place_parts.py, ...)
+services/api/_tmp/
+
+# Regeneratable netlist exports (scripts/sch_to_netlist.py). The
+# .kicad_sch files are the source of truth; the *.netlist.json /
+# *.netlist.symbols/ alongside them are derived — regenerate from
+# the tracked .kicad_sch on demand.
+services/api/tests/fixtures/rp2040.netlist.json
+services/api/tests/fixtures/rp2040.netlist.symbols/
+services/api/tests/fixtures/tps628436.netlist.json
+services/api/tests/fixtures/tps628436.netlist.symbols/
+services/api/tests/fixtures/golden/*.netlist.json
+services/api/tests/fixtures/golden/*.netlist.symbols/
+# Placer-output replays
+*.netlist.replayed.kicad_sch
+
+# Vendor datasheets — keep out of repo (IP). Regenerate fixtures on demand.
+services/api/tests/fixtures/*.pdf
+.dev-supervisor.pid
+.vercel
+
+# PyInstaller sidecar build artifacts
+services/api/build/
+services/api/dist/
+services/api/*.spec
+apps/desktop/src-tauri/binaries/

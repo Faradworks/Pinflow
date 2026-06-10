@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000.00 313.94" width="1000.00" height="313.94">
+  <defs></defs>
+  
+  <text x="60.00" y="225.82" class="pin">PIN</text>
+  <text x="377.46" y="225.82" class="flow">F</text>
+  <text x="493.98" y="225.82" class="flow">L</text>
+  
+  <defs><clipPath id="cgwm3"><circle cx="679.351" cy="156.969" r="71.757"></circle></clipPath></defs>
+  <circle cx="679.351" cy="156.969" r="71.757" fill="#0B0E14"></circle>
+  <g clip-path="url(#cgwm3)">
+    <path d="M 607.594 136.877 L 647.778 136.877 L 679.351 168.450 L 710.925 136.877 L 751.109 136.877" fill="none" stroke="#FFFFFF" stroke-width="15.787" stroke-linejoin="round" stroke-linecap="butt"></path>
+    <circle cx="679.351" cy="168.450" r="15.787" fill="#FFFFFF"></circle>
+    <circle cx="679.351" cy="168.450" r="5.741" fill="#0B0E14"></circle>
+  </g>
+  <text x="758.87" y="225.82" class="flow">W</text>
+</svg>

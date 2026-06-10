@@ -1,0 +1,360 @@
+@import "tailwindcss";
+
+/* ─────────────────────────────────────────────────────────────
+   Design tokens — light + dark variants driven by [data-theme].
+   Ported from the Pinflow standalone mockup.
+   ───────────────────────────────────────────────────────────── */
+
+:root {
+  /* ink / surface (light) */
+  --bg: #f6f6f4;
+  --bg-2: #efefec;
+  --panel: #ffffff;
+  --panel-2: #fafaf9;
+  --line: #e7e5e0;
+  --line-2: #d9d6cf;
+  --ink: #18181a;
+  --ink-2: #3f3f44;
+  --muted: #82827a;
+  --muted-2: #a6a59c;
+
+  /* accent + state */
+  --accent: #2f6bff;
+  --accent-soft: #2f6bff14;
+  --pending: #c87a00;
+  --pending-soft: #c87a0014;
+  --pending-line: #e5a647;
+  --success: #128a5a;
+  --danger: #c8412c;
+
+  /* schematic */
+  --sch-bg: #fbfaf6;
+  --sch-grid: #00000010;
+
+  /* type */
+  --font-ui: -apple-system, BlinkMacSystemFont, "SF Pro Text", "SF Pro Display",
+    "Helvetica Neue", sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, monospace;
+
+  color-scheme: light;
+}
+
+:root[data-theme="dark"] {
+  --bg: #0e0e10;
+  --bg-2: #161618;
+  --panel: #161618;
+  --panel-2: #1c1c1f;
+  --line: #26262a;
+  --line-2: #34343a;
+  --ink: #f3f3f1;
+  --ink-2: #cfcfca;
+  --muted: #82827a;
+  --muted-2: #5a5a55;
+  --accent: #7a9bff;
+  --accent-soft: #7a9bff1f;
+  --pending: #f0b765;
+  --pending-soft: #f0b76520;
+  --pending-line: #f0b765;
+  --success: #5cd49f;
+  --danger: #ff8a72;
+  --sch-bg: #101012;
+  --sch-grid: #ffffff10;
+
+  color-scheme: dark;
+}
+
+/* Expose tokens to Tailwind so utilities like bg-panel / text-ink work. */
+@theme {
+  --color-bg: var(--bg);
+  --color-bg-2: var(--bg-2);
+  --color-panel: var(--panel);
+  --color-panel-2: var(--panel-2);
+  --color-line: var(--line);
+  --color-line-2: var(--line-2);
+  --color-ink: var(--ink);
+  --color-ink-2: var(--ink-2);
+  --color-muted: var(--muted);
+  --color-muted-2: var(--muted-2);
+  --color-accent: var(--accent);
+  --color-accent-soft: var(--accent-soft);
+  --color-pending: var(--pending);
+  --color-success: var(--success);
+  --color-danger: var(--danger);
+  --font-mono: var(--font-mono);
+  --font-ui: var(--font-ui);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  margin: 0;
+  padding: 0;
+  width: 100%;
+  height: 100%;
+}
+
+body {
+  background:
+    radial-gradient(
+      1200px 700px at 70% 10%,
+      color-mix(in oklab, var(--accent) 6%, transparent),
+      transparent 60%
+    ),
+    radial-gradient(
+      1000px 600px at 10% 100%,
+      color-mix(in oklab, var(--pending) 5%, transparent),
+      transparent 60%
+    ),
+    var(--bg);
+  color: var(--ink);
+  font-family: var(--font-ui);
+  font-size: 14px;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  overflow: hidden;
+}
+
+::selection {
+  background: var(--accent-soft);
+  color: var(--ink);
+}
+
+/* ── subtle scrollbars ───────────────────────────────────────── */
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-thumb {
+  background: color-mix(in oklab, var(--ink) 18%, transparent);
+  border-radius: 8px;
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: color-mix(in oklab, var(--ink) 32%, transparent);
+  background-clip: padding-box;
+}
+
+/* ── animations ──────────────────────────────────────────────── */
+@keyframes pf-blink {
+  0%,
+  49% {
+    opacity: 1;
+  }
+  50%,
+  100% {
+    opacity: 0;
+  }
+}
+.pf-caret::after {
+  content: "▍";
+  display: inline-block;
+  margin-left: 1px;
+  color: var(--accent);
+  animation: pf-blink 1s steps(1) infinite;
+}
+
+@keyframes pf-fade-up {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+.pf-fade-up {
+  animation: pf-fade-up 320ms cubic-bezier(0.2, 0.7, 0.2, 1) both;
+}
+
+@keyframes pf-pulse-ring {
+  0% {
+    transform: scale(1);
+    opacity: 0.9;
+  }
+  100% {
+    transform: scale(2.4);
+    opacity: 0;
+  }
+}
+
+/* The chat log is a flex column with overflow:auto. Flex children default
+   to shrink:1, so when content overflows they collapse vertically (down to
+   ~2px for self-flex cards like ToolCard/BlockDiagramCard) before the
+   scroll viewport engages. Pin every direct child to natural height. */
+.pf-chat-log > * {
+  flex-shrink: 0;
+}
+
+@keyframes pf-typing-bounce {
+  0%,
+  60%,
+  100% {
+    transform: translateY(0);
+    opacity: 0.4;
+  }
+  30% {
+    transform: translateY(-3px);
+    opacity: 1;
+  }
+}
+.pf-typing-dot {
+  display: inline-block;
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: var(--accent);
+  animation: pf-typing-bounce 1.1s ease-in-out infinite;
+}
+
+/* ── kicanvas embed ─────────────────────────────────────────────
+   Override the bundle's hard-coded `:host { background: aqua }`
+   and force the web component to fill its flex parent. */
+kicanvas-embed {
+  display: block;
+  width: 100%;
+  height: 100%;
+  background: var(--sch-bg);
+
+  /* Re-tint KiCanvas's bright-purple accent to a darker, near-black purple.
+     These are the bundle's own theme custom properties; CSS custom properties
+     pierce shadow-DOM boundaries, so defining them on the host cascades into
+     every shadow root — the activity side-bar, panels, and the "Click or tap
+     to interact" focus overlay. Hue stays ~258° but lightness drops hard.
+
+     Purple surfaces (side-bar, panel titles, tooltip) all read from these
+     gradient tokens. */
+  --gradient-purple-green-light: linear-gradient(190deg, #211b30, #17131f) 0 0 fixed;
+  --gradient-purple-green-highlight: linear-gradient(190deg, #2b2440, #1f1930) 0 0 fixed;
+  --gradient-purple-blue-dark: linear-gradient(10deg, #131019, #1a1626) 0 0 fixed;
+  --gradient-purple-red: linear-gradient(90deg, #2f2547, #241d33) 0 0 fixed;
+
+  /* Solid purple surfaces. */
+  --activity-bar-bg: #17131f;
+  --panel-title-bg: #211b30;
+  --panel-title-border: 1px solid #2f2547;
+  --panel-subtitle-bg: #2a2240;
+  --list-item-active-bg: #2a2240;
+  --tooltip-bg: #241d33;
+
+  /* Thin accent strokes / selection — muted purple, kept light enough to read
+     on the dark surfaces. Force selected fg light so it stays legible now that
+     the selected bg is dark. */
+  --button-selected-bg: #4a3d6b;
+  --button-selected-fg: #f8f8f0;
+  --button-focus-outline: 1px solid #6b5b95;
+  --resizer-bg: #4a3d6b;
+  --resizer-active-bg: #6b5b95bb;
+  --scrollbar-fg: #4a3d6b66;
+  --scrollbar-active-fg: #6b5b95;
+  --scrollbar-hover-bg: #6b5b95bb;
+  --input-accent: #6b5b95;
+  --input-range-bg: #4a3d6b;
+  --input-range-hover-bg: #6b5b95;
+  --input-placeholder: #5b4b8a;
+
+  /* The "Click or tap to interact" focus overlay: a deep near-black purple
+     wash instead of the purple→green gradient. */
+  --focus-overlay-bg: #120f1c;
+  --focus-overlay-opacity: 0.72;
+}
+
+/* ── markdown (agent text in AiText) ────────────────────────────
+   The agent emits GitHub-flavored markdown; react-markdown renders
+   it inside `.pf-md`. Styled against the chat theme tokens. */
+.pf-md > :first-child {
+  margin-top: 0;
+}
+.pf-md > :last-child {
+  margin-bottom: 0;
+}
+.pf-md p {
+  margin: 0.5em 0;
+}
+.pf-md strong {
+  font-weight: 600;
+}
+.pf-md a {
+  color: var(--accent);
+  text-decoration: none;
+}
+.pf-md a:hover {
+  text-decoration: underline;
+}
+.pf-md ul,
+.pf-md ol {
+  margin: 0.5em 0;
+  padding-left: 1.4em;
+}
+.pf-md li {
+  margin: 0.15em 0;
+}
+.pf-md code {
+  font-family: var(--font-mono);
+  font-size: 0.9em;
+  background: var(--bg-2);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  padding: 0.05em 0.35em;
+}
+.pf-md pre {
+  margin: 0.6em 0;
+  padding: 10px 12px;
+  background: var(--bg-2);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  overflow-x: auto;
+}
+.pf-md pre code {
+  background: none;
+  border: none;
+  padding: 0;
+  font-size: 12.5px;
+}
+.pf-md h1,
+.pf-md h2,
+.pf-md h3 {
+  margin: 0.8em 0 0.3em;
+  font-weight: 600;
+  line-height: 1.3;
+}
+.pf-md h1 {
+  font-size: 1.25em;
+}
+.pf-md h2 {
+  font-size: 1.15em;
+}
+.pf-md h3 {
+  font-size: 1.05em;
+}
+.pf-md blockquote {
+  margin: 0.5em 0;
+  padding-left: 0.8em;
+  border-left: 2px solid var(--line-2);
+  color: var(--ink-2);
+}
+.pf-md hr {
+  border: none;
+  border-top: 1px solid var(--line);
+  margin: 0.8em 0;
+}
+.pf-md table {
+  border-collapse: collapse;
+  margin: 0.6em 0;
+  font-size: 13px;
+}
+.pf-md th,
+.pf-md td {
+  border: 1px solid var(--line);
+  padding: 4px 9px;
+  text-align: left;
+}
+.pf-md th {
+  background: var(--bg-2);
+  font-weight: 600;
+}

@@ -1,0 +1,37 @@
+{
+  "_comment": "Golden corpus for the layout-quality harness (scripts/eval_layout.py). Each entry pairs a .kicad_sch with its extracted Netlist IR (produced by scripts/sch_to_netlist.py). 'hand_drawn' entries are visual-quality references the placer is measured against; see tests/fixtures/README.md and docs/schematic-layout-design.md. Paths are relative to this file's directory. Grow this list as goldens are curated.",
+  "goldens": [
+    {
+      "name": "ams1117",
+      "sch": "golden/ams1117.kicad_sch",
+      "netlist": "golden/ams1117.netlist.json",
+      "symbols": "golden/ams1117.netlist.symbols",
+      "hand_drawn": true,
+      "note": "AMS1117-3.3 LDO — linear regulator + LED indicator"
+    },
+    {
+      "name": "mt3608",
+      "sch": "golden/mt3608.kicad_sch",
+      "netlist": "golden/mt3608.netlist.json",
+      "symbols": "golden/mt3608.netlist.symbols",
+      "hand_drawn": true,
+      "note": "MT3608 boost converter — inductor-on-top, Schottky diode"
+    },
+    {
+      "name": "tps61088",
+      "sch": "golden/tps61088.kicad_sch",
+      "netlist": "golden/tps61088.netlist.json",
+      "symbols": "golden/tps61088.netlist.symbols",
+      "hand_drawn": true,
+      "note": "TPS61088 boost converter — 20-pin, dense passive cohort"
+    },
+    {
+      "name": "tps63020",
+      "sch": "golden/tps63020.kicad_sch",
+      "netlist": "golden/tps63020.netlist.json",
+      "symbols": "golden/tps63020.netlist.symbols",
+      "hand_drawn": true,
+      "note": "TPS63020DSJR buck-boost — the original gold-standard reference"
+    }
+  ]
+}

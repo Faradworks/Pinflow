@@ -25,18 +25,25 @@ jobs:
             os: macos-14
             rust-target: aarch64-apple-darwin
             tauri-args: "--target aarch64-apple-darwin --bundles app,dmg"
+            py-arch: ""
+          # Intel macOS is cross-built on an Apple Silicon runner (Rust target +
+          # an x86_64 PyInstaller sidecar via Rosetta 2) to avoid GitHub's scarce
+          # macos-13 Intel runners. See scripts/build_sidecar.sh PINFLOW_PY_ARCH.
           - label: macos-x64
-            os: macos-13
+            os: macos-14
             rust-target: x86_64-apple-darwin
             tauri-args: "--target x86_64-apple-darwin --bundles app,dmg"
+            py-arch: "x86_64"
           - label: windows-x64
             os: windows-latest
             rust-target: ""
             tauri-args: "--bundles nsis,msi"
+            py-arch: ""
           - label: linux-x64
             os: ubuntu-22.04
             rust-target: ""
             tauri-args: "--bundles deb,appimage"
+            py-arch: ""
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -84,9 +91,19 @@ jobs:
 
       - uses: astral-sh/setup-uv@v5
 
-      # PyInstaller can't cross-compile — freeze the sidecar natively per OS.
+      # The Intel sidecar is an x86_64 binary built on this arm64 runner; it runs
+      # (build + smoke test) under Rosetta 2. Pre-installed on the image, but be
+      # explicit so the leg fails loudly rather than mysteriously if it's absent.
+      - name: Ensure Rosetta 2
+        if: matrix.py-arch == 'x86_64'
+        run: softwareupdate --install-rosetta --agree-to-license
+
+      # PyInstaller can't cross-compile across OS — freeze the sidecar natively
+      # per OS. PINFLOW_PY_ARCH cross-builds x86_64 on Apple Silicon (macOS only).
       - name: Build Python sidecar
         shell: bash
+        env:
+          PINFLOW_PY_ARCH: ${{ matrix.py-arch }}
         run: bash scripts/build_sidecar.sh
 
       # Fail fast on per-OS packaging gaps before the long Tauri bundle step.

@@ -31,10 +31,14 @@ _RAIL_NET_RE = re.compile(
 )
 
 
+def is_ground_net_name(name: str) -> bool:
+    """True when `name` follows a recognizable ground-net convention."""
+    return bool(_GND_NET_RE.match(name.strip()))
+
+
 def is_power_net_name(name: str) -> bool:
     """True when `name` follows a recognizable power/ground rail convention."""
-    s = name.strip()
-    return bool(_GND_NET_RE.match(s) or _RAIL_NET_RE.match(s))
+    return bool(is_ground_net_name(name) or _RAIL_NET_RE.match(name.strip()))
 
 
 class NetlistPart(BaseModel):

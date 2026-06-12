@@ -183,7 +183,7 @@ def build_ic_context(
                 f"{len(refs)} {ctype}{'s' if len(refs) > 1 else ''}"
                 for ctype, refs in sorted(by_type.items())
             ]
-            n_unique = len({pc.component_ref for pc in neighbors})
+            n_unique = sum(len(refs) for refs in by_type.values())
             lines.append(f"  {n_unique} components on this net: {', '.join(parts)}")
             # List ICs specifically — too important to summarize away.
             for pc in neighbors:

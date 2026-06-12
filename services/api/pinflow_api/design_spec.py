@@ -142,7 +142,13 @@ def _find_pin(profile_pins, *names: str) -> Optional[str]:
 
 
 def _norm_pn(s: str) -> str:
-    """Part-number comparison form: case/separator-insensitive."""
+    """Part-number comparison form: case/separator-insensitive.
+
+    Deliberately KEEPS dots — the voltage option in MPNs like `AP2112K-3.3`
+    lives in the dot ("33" would collide with other option codes). Distinct
+    from `graph.builder._norm_mpn` / `symbol_resolver._canon`, which strip
+    all punctuation for looser identity matching.
+    """
     return re.sub(r"[^A-Z0-9.]", "", s.upper())
 
 

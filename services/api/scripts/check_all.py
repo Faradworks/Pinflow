@@ -75,7 +75,7 @@ def main() -> int:
             # noise lines from kicad-cli); find the object start.
             payload = out[out.index("{"):]
             reports = json.loads(payload).get("reports", [])
-        except (ValueError, json.JSONDecodeError) as e:
+        except ValueError as e:  # covers json.JSONDecodeError + str.index miss
             reports = []
             failures.append(f"eval_layout: could not parse --json output: {e}")
         for r in reports:

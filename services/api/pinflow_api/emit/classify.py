@@ -29,13 +29,14 @@ import re
 from dataclasses import dataclass, field
 from enum import Enum
 
-from pinflow_api.emit.netlist import Netlist
+from pinflow_api.emit.netlist import Netlist, is_ground_net_name
 from pinflow_api.emit.pinmap import PinInfo, by_number, pinmap_for_lib_id
 
 
 # --- name heuristics ----------------------------------------------------------
 # Matched against IC *pin* names. Broad on purpose; extend as chips are added.
-_GND_RE = re.compile(r"^(GND|AGND|DGND|PGND|GNDA|GNDD|VSS|GROUND|EARTH)", re.I)
+# (Ground NET names share the same convention — that matcher lives in
+# emit.netlist.is_ground_net_name, the single source of truth.)
 _VIN_RE = re.compile(
     r"^(VIN|VCC|VDD|VBAT|PVIN|AVIN|PVDD|AVDD|VDDA|SYS|VBUS|VPWR|VI|IN\b)", re.I
 )
@@ -48,10 +49,6 @@ _CTRL_RE = re.compile(
     r"DLY|NRST|RESET)",
     re.I,
 )
-
-
-def _is_ground_name(s: str) -> bool:
-    return bool(_GND_RE.match(s.strip()))
 
 
 def _is_vin(s: str) -> bool:
@@ -245,7 +242,7 @@ def _classify_nets(
         # series elements, the layout tree loses its rails, and the placer
         # output degrades catastrophically (overlapping parts, merged
         # nets). GLOBAL is only for non-power boundary signals.
-        if net.is_power and (_is_ground_name(net.name) or net.voltage == 0):
+        if net.is_power and (is_ground_net_name(net.name) or net.voltage == 0):
             kind = NetKind.GROUND
         elif net.is_power:
             kind = NetKind.RAIL

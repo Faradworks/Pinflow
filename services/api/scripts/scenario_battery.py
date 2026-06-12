@@ -65,7 +65,7 @@ SCENARIOS = [
 ]
 
 MAX_RESUMES = 6
-MAX_FOLLOWUPS = 2
+MAX_FOLLOWUPS = 6
 
 
 def sse_events(resp):
@@ -139,6 +139,17 @@ def run_scenario(client, sc):
     pdf_sent = False
     gate_idx = 0
     followups = list(sc.get("followups") or [])
+
+    def advance(path: str, body: dict, counter: str) -> bool:
+        """Stream the next leg, bump its counter; False on transport error."""
+        nonlocal events
+        events, err = stream(client, path, body)
+        summary[counter] += 1
+        if err:
+            summary["errors"].append(err)
+            return False
+        return True
+
     while True:
         summary["events"] += len(events)
         for k, d in events:
@@ -157,11 +168,9 @@ def run_scenario(client, sc):
             gate_idx += 1
             summary["suspensions"].append(
                 f"Q: {question[:70]} -> {ans[:40]}")
-            events, err = stream(client, "/agent/chat/resume",
-                                 {"conversation_id": conv, "answer": ans})
-            summary["resumes"] += 1
-            if err:
-                summary["errors"].append(err)
+            if not advance("/agent/chat/resume",
+                           {"conversation_id": conv, "answer": ans},
+                           "resumes"):
                 break
             continue
 
@@ -176,23 +185,17 @@ def run_scenario(client, sc):
                                  timeout=120)
             aid = up.json()["attachments"][0]["attachment_id"]
             pdf_sent = True
-            events, err = stream(client, "/agent/chat", {
-                "user_text": f"here is the {sc.get('pdf_mpn','')} datasheet",
-                "conversation_id": conv,
-                "attachment_ids": [aid]})
-            summary["followups"] += 1
-            if err:
-                summary["errors"].append(err)
+            if not advance("/agent/chat", {
+                    "user_text": f"here is the {sc.get('pdf_mpn','')} datasheet",
+                    "conversation_id": conv,
+                    "attachment_ids": [aid]}, "followups"):
                 break
             continue
 
-        if not suspended and followups and summary["followups"] < 6:
-            nxt = followups.pop(0)
-            events, err = stream(client, "/agent/chat", {
-                "user_text": nxt, "conversation_id": conv})
-            summary["followups"] += 1
-            if err:
-                summary["errors"].append(err)
+        if not suspended and followups and summary["followups"] < MAX_FOLLOWUPS:
+            if not advance("/agent/chat", {
+                    "user_text": followups.pop(0),
+                    "conversation_id": conv}, "followups"):
                 break
             continue
         break

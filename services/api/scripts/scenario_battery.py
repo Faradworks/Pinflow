@@ -5,6 +5,13 @@ COMMITS to whatever schematic KiCad has open — point KiCad at a disposable
 sandbox project before running.
 
 Usage: cd services/api && .venv/bin/python scripts/scenario_battery.py
+       ... scenario_battery.py --scenarios my_round.json   # custom battery
+
+Scenario fields: name, text; optional pdf/pdf_mpn (auto-attached when the
+agent asks for a datasheet), gate_script (answers consumed in order at
+suspensions, falling back to the default Confirm/first-option policy), and
+followups (texts sent in order whenever a stream ends un-suspended —
+multi-turn conversations).
 
 Drives varied realistic conversations through the live SSE API, auto-answering
 gates, attaching datasheets when the agent asks, and classifying outcomes:
@@ -86,7 +93,13 @@ def stream(client, path, body):
     return events, None
 
 
-def pick_answer(question, options):
+def pick_answer(question, options, gate_script=None, gate_idx=0):
+    if gate_script and gate_idx < len(gate_script):
+        return gate_script[gate_idx]
+    return _default_answer(question, options)
+
+
+def _default_answer(question, options):
     opts = [str(o) for o in (options or [])]
     for want in ("Confirm", "Proceed", "Yes"):
         for o in opts:
@@ -124,6 +137,8 @@ def run_scenario(client, sc):
     summary["conv"] = conv
 
     pdf_sent = False
+    gate_idx = 0
+    followups = list(sc.get("followups") or [])
     while True:
         summary["events"] += len(events)
         for k, d in events:
@@ -137,7 +152,9 @@ def run_scenario(client, sc):
             qq = (q or {}).get("questions") or [{}]
             question = qq[0].get("q", "")
             options = qq[0].get("options", [])
-            ans = pick_answer(question, options)
+            ans = pick_answer(question, options,
+                              sc.get("gate_script"), gate_idx)
+            gate_idx += 1
             summary["suspensions"].append(
                 f"Q: {question[:70]} -> {ans[:40]}")
             events, err = stream(client, "/agent/chat/resume",
@@ -163,6 +180,16 @@ def run_scenario(client, sc):
                 "user_text": f"here is the {sc.get('pdf_mpn','')} datasheet",
                 "conversation_id": conv,
                 "attachment_ids": [aid]})
+            summary["followups"] += 1
+            if err:
+                summary["errors"].append(err)
+                break
+            continue
+
+        if not suspended and followups and summary["followups"] < 6:
+            nxt = followups.pop(0)
+            events, err = stream(client, "/agent/chat", {
+                "user_text": nxt, "conversation_id": conv})
             summary["followups"] += 1
             if err:
                 summary["errors"].append(err)
@@ -199,7 +226,9 @@ def run_scenario(client, sc):
 
 
 def main():
-    global SCH
+    global SCH, SCENARIOS
+    if len(sys.argv) > 2 and sys.argv[1] == "--scenarios":
+        SCENARIOS = json.loads(Path(sys.argv[2]).read_text())
     client = httpx.Client()
     proj = client.get(API + "/kicad/active-project", timeout=30).json()
     if not proj.get("detected") or not proj.get("schematic_path"):

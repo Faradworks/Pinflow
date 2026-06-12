@@ -58,7 +58,10 @@ SCHEMA = {
                     "MUST list ≥2 endpoints; naming a net with no endpoints "
                     "wires NOTHING and is rejected. Mark rails and exposed "
                     "boundary signals is_port:true (port_bindings can rename "
-                    "them).\n"
+                    "them). Name power rails conventionally (GND, +5V, +3V3, "
+                    "VBUS, VIN, VOUT) — they're auto-detected and drawn with "
+                    "power symbols; for an unconventionally named rail set "
+                    '"is_power": true on the net explicitly.\n'
                     "Example — a 5.1k pulldown from a USB-C CC1 pin to GND: "
                     '{"parts":[{"refdes":"J1","lib_id":"Connector:'
                     'USB_C_Receptacle_USB2.0_16P"},{"refdes":"R1","lib_id":'

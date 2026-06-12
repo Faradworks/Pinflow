@@ -89,7 +89,7 @@ class NetKind(str, Enum):
     GROUND = "ground"
     RAIL = "rail"          # power rail (non-ground)
     SIGNAL = "signal"      # local signal net
-    GLOBAL = "global"      # port — exposed beyond this subcircuit
+    GLOBAL = "global"      # non-power port — signal exposed beyond this subcircuit
 
 
 class RailSide(str, Enum):
@@ -237,12 +237,20 @@ def _classify_nets(
             if pi is not None:
                 contacts.append(ICContact(ep.ref, pi))
 
-        if net.is_port:
-            kind = NetKind.GLOBAL
-        elif net.is_power and (_is_ground_name(net.name) or net.voltage == 0):
+        # Power identity FIRST — a rail is a rail even when exposed as a
+        # port. Agent-built netlists mark every rail `is_port: true` (the
+        # tool schema tells them to), and letting port-ness eclipse
+        # GROUND/RAIL here strips power identity from every rail in the
+        # block: caps stop classifying as cin/cout, pull resistors become
+        # series elements, the layout tree loses its rails, and the placer
+        # output degrades catastrophically (overlapping parts, merged
+        # nets). GLOBAL is only for non-power boundary signals.
+        if net.is_power and (_is_ground_name(net.name) or net.voltage == 0):
             kind = NetKind.GROUND
         elif net.is_power:
             kind = NetKind.RAIL
+        elif net.is_port:
+            kind = NetKind.GLOBAL
         else:
             kind = NetKind.SIGNAL
 

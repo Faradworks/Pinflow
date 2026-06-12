@@ -746,13 +746,19 @@ def _side_column_offset(side: str, config_cols: dict[str, int],
 def _emit_control_resistor(g: GroupNode, parts: dict[str, _Part], ctx: _Ctx,
                            cs: _CSet, config_cols: dict[str, int],
                            has_filter: set[str],
-                           bootstrap_cols: dict[str, int] | None = None) -> None:
+                           bootstrap_cols: dict[str, int] | None = None,
+                           side_edge: dict[str, str] | None = None) -> None:
     """Control / pull resistors — each placed at *its own* IC control pin's
     Y or X, just past the IC body on the side that pin lives on (L/R/T/B).
     The X offset compounds: a same-side rail filter pushes the resistor past
     the filter caps; a same-side config-cap group adds another column step.
     Without this, an EN pull-up on a buck-converter's LEFT side lands in the
-    same X column as the input filter cap and overlaps with it (mt3608)."""
+    same X column as the input filter cap and overlaps with it (mt3608).
+
+    When the side's outermost band occupant is known (`side_edge`) and no
+    config/bootstrap columns complicate the side, the resistor clears it
+    with an extent-aware MinGap instead of the fixed column guess — a fixed
+    COL_GAP can't know how far the bank actually reaches."""
     ic_part = parts.get(ctx.anchor)
     if ic_part is None:
         return
@@ -774,6 +780,18 @@ def _emit_control_resistor(g: GroupNode, parts: dict[str, _Part], ctx: _Ctx,
         off = pin_off.get(ic_facing, (0.0, 0.0))
         if pi.side in ("L", "R"):
             cs.ay_pin(r, ic_facing, ctrl_xy[1], parts)
+            edge_ref = (side_edge or {}).get(pi.side)
+            side_uncrowded = (
+                not config_cols.get(pi.side)
+                and not (bootstrap_cols or {}).get(pi.side)
+            )
+            if edge_ref is not None and edge_ref in parts and side_uncrowded:
+                # Extent-aware: pack just past the band's outermost member.
+                if pi.side == "R":
+                    cs.gx(edge_ref, r, _gap(edge_ref, r, parts, ctx, STACK_GAP))
+                else:
+                    cs.gx(r, edge_ref, _gap(r, edge_ref, parts, ctx, STACK_GAP))
+                continue
             edge_x = _side_edge_x(ctx.ic_comp, pi.side)
             extra = _side_column_offset(pi.side, config_cols, has_filter,
                                          bootstrap_cols)
@@ -1200,6 +1218,7 @@ def _emit_all(tree: LayoutTree, parts: dict[str, _Part], ctx: _Ctx) -> _CSet:
             members = _emit_rail_bank(g, parts, ctx, cs, cursor)
         if members:
             cursor = members[-1]                # rightmost so far
+    right_edge = cursor if cursor != ctx.anchor else None
 
     # Left side: input filter(s).
     cursor = ctx.anchor
@@ -1207,6 +1226,7 @@ def _emit_all(tree: LayoutTree, parts: dict[str, _Part], ctx: _Ctx) -> _CSet:
         members = _emit_rail_bank(g, parts, ctx, cs, cursor)
         if members:
             cursor = members[-1]                # leftmost so far
+    left_edge = cursor if cursor != ctx.anchor else None
 
     # Config caps, control resistors, bootstrap, and loose all sit
     # independently of the left/right rail-trunk cursor — each anchors to
@@ -1238,9 +1258,21 @@ def _emit_all(tree: LayoutTree, parts: dict[str, _Part], ctx: _Ctx) -> _CSet:
     for g in boots:
         side = _side_of(g, tree)
         bootstrap_cols[side] = bootstrap_cols.get(side, 0) + len(g.members)
+    # The outermost side-band occupant per side, for extent-aware clearing.
+    # A fixed COL_GAP step can't know how far a multi-cap bank actually
+    # reaches, so a control resistor offset by one column still lands inside
+    # the bank's body (AP2112K: EN pull-up vs the input cap at the same Y).
+    # Cap-island mode vacates the side bands, so the edges don't apply there.
+    side_edge: dict[str, str] = {}
+    if not any(g.archetype == Archetype.SIGNAL_STAIRCASE for g in tree.groups):
+        if right_edge is not None and "R" in has_filter_on:
+            side_edge["R"] = right_edge
+        if left_edge is not None and "L" in has_filter_on:
+            side_edge["L"] = left_edge
     for g in ctrl_rs:
         _emit_control_resistor(g, parts, ctx, cs,
-                               config_cols, has_filter_on, bootstrap_cols)
+                               config_cols, has_filter_on, bootstrap_cols,
+                               side_edge)
     for g in boots:
         _emit_bootstrap(g, parts, ctx, cs, has_filter_on)
     for g in shunts:
@@ -1366,13 +1398,36 @@ def _build_once(netlist: Netlist, tree: LayoutTree, title: str,
 
     # Translate each support cell so its origin lands on the solved position.
     # The IC is already at its anchored spot; translating by zero is a no-op.
-    for ref, p in parts.items():
+    #
+    # Anti-stack guard: two cells must never land on the same solved spot —
+    # same-symbol parts at one origin have coincident pins, which silently
+    # merges their nets at wiring time (the topology validator then rejects
+    # the whole placement, and the agent retries the identical input into a
+    # dead end). Identical targets mean an upstream emitter anchored two
+    # parts to the same reference; stagger duplicates deterministically so
+    # connectivity survives even when the layout is imperfect.
+    taken: set[tuple[float, float]] = set()
+    if anchor in parts:
+        a = parts[anchor]
+        taken.add((round(a.origin[0], 2), round(a.origin[1], 2)))
+    for ref in sorted(parts, key=_natural_key):
+        p = parts[ref]
         if ref == anchor:
             placed_refs.setdefault(ref, (_snap(p.origin[0] - p.leftext),
                                           _snap(p.origin[1] - p.topext)))
             continue
         target_x = xr.pos.get(ref, IC_X)
         target_y = yr.pos.get(ref, IC_Y)
+        nudged = False
+        while (round(target_x, 2), round(target_y, 2)) in taken:
+            target_y += COL_GAP
+            nudged = True
+        if nudged:
+            issues.append(
+                f"anti-stack: {ref} shared a solved position with another "
+                f"part — staggered down to y={target_y:.2f}"
+            )
+        taken.add((round(target_x, 2), round(target_y, 2)))
         dx = target_x - p.origin[0]
         dy = target_y - p.origin[1]
         _translate(p.cell, dx, dy, placed_refs)

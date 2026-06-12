@@ -563,8 +563,42 @@ def _drive(
             # in the same response still get dispatched + result-appended
             # this turn — Anthropic rejects the next request otherwise
             # ("tool_use ids were found without tool_result blocks").
+            #
+            # Only ONE ask_user can suspend: the resume answer reattaches to a
+            # single tool_use_id. The model occasionally emits two ask_user
+            # calls in one response — the extras must still get a tool_result
+            # (synthetic, here) or the dangling id 400s every subsequent
+            # request and permanently bricks the conversation.
             if name == "ask_user":
-                ask_user_tu = tu
+                if ask_user_tu is None:
+                    ask_user_tu = tu
+                else:
+                    _trace(
+                        trace,
+                        t="tool_result",
+                        turn=turn,
+                        tool=name,
+                        tool_use_id=tu.id,
+                        result={"status": "superseded"},
+                    )
+                    tool_results.append(
+                        {
+                            "type": "tool_result",
+                            "tool_use_id": tu.id,
+                            "content": json.dumps(
+                                {
+                                    "status": "superseded",
+                                    "hint": (
+                                        "Only one ask_user per turn is "
+                                        "supported; this question was NOT "
+                                        "shown to the user. Re-ask it after "
+                                        "the first answer arrives if still "
+                                        "relevant."
+                                    ),
+                                }
+                            ),
+                        }
+                    )
                 continue
 
             # Normal tool dispatch.

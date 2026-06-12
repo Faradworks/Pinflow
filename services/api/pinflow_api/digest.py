@@ -170,17 +170,21 @@ def build_ic_context(
             if pc.component_ref != ref and pc.component_ref in graph.components
         ]
 
-        # Summarize large ground/power nets
+        # Summarize large ground/power nets. Count unique COMPONENTS, not
+        # pin attachments — a connector grounding through 5 pins is one
+        # component, and "5 connectors" misleads the model into inventing
+        # hardware that doesn't exist.
         if len(neighbors) > _GROUND_NET_MAX_COMPONENTS and net.net_type in (NetType.GROUND, NetType.POWER):
-            by_type: dict[str, list[str]] = {}
+            by_type: dict[str, set[str]] = {}
             for pc in neighbors:
                 nb = graph.components[pc.component_ref]
-                by_type.setdefault(nb.component_type.value, []).append(pc.component_ref)
+                by_type.setdefault(nb.component_type.value, set()).add(pc.component_ref)
             parts = [
                 f"{len(refs)} {ctype}{'s' if len(refs) > 1 else ''}"
                 for ctype, refs in sorted(by_type.items())
             ]
-            lines.append(f"  {len(neighbors)} components on this net: {', '.join(parts)}")
+            n_unique = len({pc.component_ref for pc in neighbors})
+            lines.append(f"  {n_unique} components on this net: {', '.join(parts)}")
             # List ICs specifically — too important to summarize away.
             for pc in neighbors:
                 nb = graph.components[pc.component_ref]
@@ -358,6 +362,17 @@ def build_digest(
 
     # Per-IC blocks
     for ref in ic_refs:
+        lines.append("=" * 60)
+        lines.append(build_ic_context(graph, profiles_by_mpn, ref))
+        lines.append("")
+
+    # Connector blocks. Without these, anything attached only to a
+    # connector's signal pins (USB-C CC pulldowns, ESD parts on D+/D-) is
+    # INVISIBLE to the model — it sees the count in the header, then denies
+    # the parts exist when asked to edit them. build_ic_context is
+    # component-agnostic: connectors simply have no MPN profile, so pins
+    # render by number with their nets and neighbors.
+    for ref in graph.components_by_type(ComponentType.CONNECTOR):
         lines.append("=" * 60)
         lines.append(build_ic_context(graph, profiles_by_mpn, ref))
         lines.append("")

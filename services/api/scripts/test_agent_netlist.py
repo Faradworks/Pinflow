@@ -67,6 +67,51 @@ AGENT_NETLIST = {
 }
 
 
+def _rename_rails(rails: tuple[str, str, str], *, force_power: bool = False) -> dict:
+    """AGENT_NETLIST with (+5V, +3V3, GND) renamed — adversarial rail names."""
+    import copy
+
+    data = copy.deepcopy(AGENT_NETLIST)
+    mapping = dict(zip(("+5V", "+3V3", "GND"), rails))
+    for net in data["nets"]:
+        if net["name"] in mapping:
+            net["name"] = mapping[net["name"]]
+            if force_power:
+                net["is_power"] = True
+    return data
+
+
+def _no_stacked_symbols(sch_text: str) -> list[tuple[str, str]]:
+    """Pairs of non-power symbols sharing identical coordinates (must be [])."""
+    import re as _re
+
+    seen: dict[tuple[str, str], str] = {}
+    dups: list[tuple[str, str]] = []
+    pat = _re.compile(
+        r'\(symbol\s+\(lib_id "[^"]+"\)\s+\(at ([\d.-]+) ([\d.-]+) \d+\)'
+        r'.*?\(property "Reference" "([^"]+)"', _re.S)
+    for x, y, ref in pat.findall(sch_text):
+        if ref.startswith("#PWR"):
+            continue
+        if (x, y) in seen:
+            dups.append((seen[(x, y)], ref))
+        seen[(x, y)] = ref
+    return dups
+
+
+# Hostile variants: the invariant is graceful degradation — layout may be
+# ugly, but topology must survive the round-trip and parts must never stack
+# (coincident pins silently merge nets, which is what fed the retry spiral).
+ADVERSARIAL = {
+    "lowercase rails": _rename_rails(("+5v", "+3v3", "gnd")),
+    "numeric rails": _rename_rails(("5V", "3V3", "GND")),
+    "unconventional rail names (heuristics miss)": _rename_rails(
+        ("PWR_RAIL", "CORE_SUPPLY", "RETURN_PATH")),
+    "unconventional names, explicit is_power": _rename_rails(
+        ("PWR_RAIL", "CORE_SUPPLY", "RETURN_PATH"), force_power=True),
+}
+
+
 def main() -> int:
     nl = Netlist.model_validate(AGENT_NETLIST)
 
@@ -92,8 +137,18 @@ def main() -> int:
     vr = validate_placer_output(nl, result)
     assert vr.ok, vr.errors
     assert not any("fell back to label-only" in i for i in result.issues), result.issues
-
+    assert not _no_stacked_symbols(result.sch_text)
     print("PASS  agent-shaped netlist classifies, places, and validates")
+
+    for name, data in ADVERSARIAL.items():
+        anl = Netlist.model_validate(data)
+        ares = get_placer()(anl, title=name)
+        avr = validate_placer_output(anl, ares)
+        assert avr.ok, (name, avr.errors)
+        stacked = _no_stacked_symbols(ares.sch_text)
+        assert not stacked, (name, stacked)
+        print(f"PASS  adversarial: {name}")
+
     return 0
 
 

@@ -186,6 +186,8 @@ def run_scenario(client, sc):
         verdict = "BROKEN"
     elif summary["errors"]:
         verdict = "ERROR"
+    elif "anthropic error" in sys_blob or "error" in sys_blob.lower()[:40]:
+        verdict = "ERROR"
     elif "max turns" in sys_blob:
         verdict = "MAXTURNS"
     elif "Stopped:" in sys_blob:

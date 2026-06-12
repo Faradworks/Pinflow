@@ -55,6 +55,8 @@ SCENARIOS = [
      "text": "Remove the CC pulldown resistors from the USB connector."},
     {"name": "vague-ask",
      "text": "i want usb power but like 1.8 volts for my sensor idk"},
+    {"name": "chinese",
+     "text": "请在 +3V3 电源轨上加一个 100nF 的去耦电容，放在稳压器附近，另一端接 GND"},
     {"name": "boost-cold-datasheet",
      "text": "Add an MT3608 boost converter taking +5V up to 12V at 1A.",
      "pdf": "/tmp/MT3608.pdf", "pdf_mpn": "MT3608"},

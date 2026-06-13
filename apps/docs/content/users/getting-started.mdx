@@ -1,0 +1,78 @@
+---
+title: Getting started
+description: Install Pinflow, bring your own Anthropic API key, and boot the app.
+---
+
+import { Callout, Steps } from 'nextra/components'
+
+# Getting started
+
+Pinflow is a desktop companion to KiCad. You keep KiCad open and use Pinflow
+alongside it: a chat-driven agent on the left, a live schematic viewer on the
+right.
+
+## Prerequisites
+
+- **KiCad 10** (macOS or Windows)
+- **Python 3.10+**
+- **Node.js**
+- **Rust** — for building the [Tauri](https://tauri.app/) desktop shell
+- **[`uv`](https://github.com/astral-sh/uv)** — Python environment + package manager
+
+## Install
+
+<Steps>
+
+### Set up the backend (FastAPI service)
+
+```bash
+cd services/api
+uv venv && uv pip install -e .
+```
+
+### Set up the frontend (Tauri + React)
+
+```bash
+cd apps/desktop
+npm install
+```
+
+</Steps>
+
+## Bring your own key (BYOK)
+
+Pinflow runs entirely on **your own Anthropic API key** — the BYOK build is the
+complete product. You can either enter your key in the app's first-run
+onboarding screen, or set it in `services/api/.env`:
+
+```bash
+# services/api/.env
+ANTHROPIC_API_KEY=sk-ant-...
+```
+
+<Callout type="info">
+  Your key stays local. Pinflow's backend runs on your machine and talks to the
+  Anthropic API directly with the key you provide.
+</Callout>
+
+## Run it
+
+From the repo root, boot the FastAPI service and the Tauri desktop shell
+together:
+
+```bash
+./scripts/dev.sh
+```
+
+## Optional: Pinflow Cloud
+
+**Pinflow Cloud** is a hosted, managed-key add-on you can sign into from within
+the app — a convenience layer on top of the open-source app for people who'd
+rather not manage their own key or self-host. It's entirely optional; the
+open-source app is the full product.
+
+## Next steps
+
+- [How it works](/users/how-it-works) — the mental model: the agent, the live
+  viewer, and review-before-commit.
+- [Troubleshooting](/users/troubleshooting) — common setup hiccups.

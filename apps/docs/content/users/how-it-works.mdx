@@ -1,0 +1,52 @@
+---
+title: How it works
+description: The mental model — the chat agent, the live viewer, and review-before-commit.
+---
+
+import { Callout } from 'nextra/components'
+
+# How it works
+
+The mental model is simple: **KiCad is home, Pinflow is the AI co-designer that
+sits next to it.** Pinflow doesn't replace KiCad — you keep your project open in
+KiCad and use Pinflow to add and edit circuitry quickly.
+
+## The two-pane shell
+
+- **Left — the chat agent.** You describe what you want ("add a 5V→3V3 buck,"
+  "resolve real parts for this block"). The agent can read your currently-open
+  KiCad schematic, draft and place subcircuits, and look up orderable parts.
+- **Right — the live schematic viewer.** It renders your open `.kicad_sch` and
+  updates as the agent proposes changes, so you see what's happening as it
+  happens.
+
+## Review before it touches your files
+
+This is the part worth internalizing: **the agent's edits don't go straight to
+disk.** Changes land in a *staged working copy* that you review in the viewer,
+then explicitly **commit** or **discard**.
+
+- While staged, the viewer highlights what changed.
+- **Commit** writes the change back to your real `.kicad_sch`.
+- **Discard** throws the working copy away — your file is untouched.
+
+<Callout type="info">
+  Nothing is written to your files without an explicit accept. Pinflow never
+  writes into your project's git history — a commit is a plain file write to
+  your `.kicad_sch`.
+</Callout>
+
+## Bring your own key
+
+Pinflow runs on your own Anthropic API key (see
+[Getting started](/users/getting-started)). The agent's reasoning happens
+through that key; your schematic and prompts go to the Anthropic API to power
+the agent, and nowhere else unless you opt into [Pinflow
+Cloud](/users/getting-started#optional-pinflow-cloud).
+
+<Callout type="warning">
+  Pinflow is in alpha. The agent loop, the live viewer, and the staging
+  workflow are real, but many individual agent capabilities are still being
+  built. When a feature isn't implemented yet, the agent is designed to say so
+  rather than pretend.
+</Callout>

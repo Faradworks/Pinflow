@@ -1,0 +1,41 @@
+---
+title: Contributing
+description: How to contribute to Pinflow.
+---
+
+# Contributing
+
+Contributions are welcome. Pinflow is open source under the
+[GNU General Public License v3.0 or later](https://github.com/Faradworks/Pinflow/blob/main/LICENSE).
+
+## Before you start
+
+- Build, run, and architecture notes live in [Local
+  development](/developers/local-dev) and [Architecture at a
+  glance](/developers/architecture).
+- For bugs and feature ideas, please [open an
+  issue](https://github.com/Faradworks/Pinflow/issues) before a large PR so we
+  can discuss the approach first.
+
+## Pull request basics
+
+1. Fork the repo and create a topic branch.
+2. Keep changes focused, and match the style of the surrounding code.
+3. Make sure the app builds (`npm run build` in `apps/desktop`) and the Python
+   service imports cleanly.
+4. If you change a feature, update its documentation page in the same PR —
+   docs live in `apps/docs/content/`, so they version with the code.
+5. Open the PR and address review feedback.
+
+## Code conventions
+
+- **Keep things modular.** Each feature lives in its own folder (frontend) or
+  module (backend) with a narrow surface, no cross-imports between sibling
+  feature folders. If a file grows past ~200 lines or mixes concerns, split it.
+- Match the conventions of the code you're editing — naming, comment density,
+  and idiom.
+
+## Licensing of contributions
+
+By submitting a contribution, you certify that you wrote it (or otherwise have
+the right to submit it) and agree to license it under the terms above.

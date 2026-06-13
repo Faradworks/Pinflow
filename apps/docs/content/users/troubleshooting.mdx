@@ -1,0 +1,60 @@
+---
+title: Troubleshooting
+description: Common setup and runtime hiccups, and how to clear them.
+---
+
+import { Callout } from 'nextra/components'
+
+# Troubleshooting
+
+<Callout type="info">
+  This list grows as we learn what trips people up. If you hit something that
+  isn't here, please [open an
+  issue](https://github.com/Faradworks/Pinflow/issues).
+</Callout>
+
+## Pinflow doesn't detect my open KiCad project
+
+Pinflow detects the active project over KiCad's IPC interface. Enable it in
+KiCad's preferences (or in `kicad_common.json`):
+
+```json
+{
+  "api": {
+    "enable_server": true
+  }
+}
+```
+
+Restart KiCad after changing this. The project name comes from the IPC; the
+viewer reads your currently-open `.kicad_sch`.
+
+## The agent errors immediately / "no API key"
+
+Pinflow needs an Anthropic API key. Either enter it in the first-run onboarding
+screen, or set `ANTHROPIC_API_KEY` in `services/api/.env`. See [Getting
+started](/users/getting-started#bring-your-own-key-byok).
+
+## "Address already in use" on startup
+
+The backend listens on `127.0.0.1:8787`. If another process holds that port
+(for example, a previous run that didn't shut down), stop it and try again:
+
+```bash
+lsof -i :8787      # find the process
+```
+
+## The schematic viewer is blank
+
+- Confirm a KiCad project is open and IPC is enabled (see above).
+- Switch focus back to the Pinflow window — the viewer refreshes when it
+  regains focus.
+- If a specific schematic won't render, please [open an
+  issue](https://github.com/Faradworks/Pinflow/issues) with the file (or a
+  minimal repro) attached.
+
+## Something else
+
+Pinflow is in alpha and rough edges are expected. Bug reports with steps to
+reproduce are genuinely useful — [open an
+issue](https://github.com/Faradworks/Pinflow/issues).

@@ -69,17 +69,30 @@ after confirming a newer nextra/zod combination renders.
 
 ## Deploy (Vercel)
 
-The site is a standalone Next.js app; deploy it as its own Vercel project so it
-stays decoupled from the desktop app and the API.
+The site is a standalone Next.js app deployed as its own Vercel project
+(`pinflow-docs`, in the `faradworks-projects` team), decoupled from the desktop
+app and the API. The project is linked from **this directory** (`.vercel/` here,
+gitignored), so deploys only ever upload `apps/docs` — the rest of the monorepo
+is invisible to it.
 
-1. **New Vercel project** from the `Faradworks/Pinflow` repo.
-2. **Root Directory:** `apps/docs` (Project Settings → Build & Development).
-   Framework preset auto-detects as **Next.js**; no build-command overrides
-   needed (`npm run build`).
-3. **Domain:** add `docs.pinflow.faradworks.com` and point a `CNAME` at Vercel
-   (`cname.vercel-dns.com`).
-4. Pushes to `main` deploy production; every PR gets a preview URL — which
-   doubles as a doc-review preview.
+Deploy a new production build from `apps/docs`:
 
-Search uses Nextra's built-in [Pagefind](https://pagefind.app/), indexed at
-build time — no external service to configure.
+```bash
+vercel deploy --prod        # builds remotely; Pagefind search indexed at build
+```
+
+**Custom domain.** `docs.pinflow.faradworks.com` is attached to the project.
+The `faradworks.com` zone is on Google Cloud DNS and its Vercel subdomains use
+an **A record to `76.76.21.21`** (same as `pinflow.faradworks.com`), so add:
+
+```
+A   docs.pinflow.faradworks.com   76.76.21.21
+```
+
+(A `CNAME` to `cname.vercel-dns.com` also works; the A record matches the
+existing zone pattern.) Vercel auto-verifies and issues SSL once it resolves.
+
+**Git auto-deploy (optional, later).** Currently deploys are CLI-driven. To get
+push-to-deploy + PR previews, connect the project to the `Faradworks/Pinflow`
+GitHub repo and set **Root Directory = `apps/docs`** (do this after `apps/docs`
+lands on `main`).

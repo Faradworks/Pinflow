@@ -21,10 +21,13 @@ pub fn run() {
         .setup(|app| {
             // The onedir sidecar is bundled under Resources/ (exe + _internal/
             // sibling). The glob form preserves the path relative to src-tauri,
-            // so probe both likely spots for the executable.
+            // so probe both likely spots for the executable — and on Windows
+            // PyInstaller names it `pinflow-api.exe`, so try that suffix too.
             let exe = [
                 "binaries/pinflow-api/pinflow-api",
+                "binaries/pinflow-api/pinflow-api.exe",
                 "pinflow-api/pinflow-api",
+                "pinflow-api/pinflow-api.exe",
             ]
             .iter()
             .filter_map(|p| app.path().resolve(p, BaseDirectory::Resource).ok())

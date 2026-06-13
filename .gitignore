@@ -79,4 +79,5 @@ services/api/tests/fixtures/*.pdf
 services/api/build/
 services/api/dist/
 services/api/*.spec
+services/api/.venv-build/
 apps/desktop/src-tauri/binaries/

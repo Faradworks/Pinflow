@@ -1,0 +1,139 @@
+name: Release
+
+# Cut a release by pushing a tag that matches the app version, e.g.
+#   git tag v0.1.0 && git push origin v0.1.0
+# That builds every OS and publishes a DRAFT GitHub Release with the installers
+# attached (review, then publish). Use the "Run workflow" button for a dry-run
+# build that uploads the installers as workflow artifacts without releasing.
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch: {}
+
+permissions:
+  contents: write # tauri-action creates the GitHub Release + uploads assets
+
+jobs:
+  build:
+    name: ${{ matrix.label }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - label: macos-arm64
+            os: macos-14
+            rust-target: aarch64-apple-darwin
+            tauri-args: "--target aarch64-apple-darwin --bundles app,dmg"
+            py-arch: ""
+          # Intel macOS is cross-built on an Apple Silicon runner (Rust target +
+          # an x86_64 PyInstaller sidecar via Rosetta 2) to avoid GitHub's scarce
+          # macos-13 Intel runners. See scripts/build_sidecar.sh PINFLOW_PY_ARCH.
+          - label: macos-x64
+            os: macos-14
+            rust-target: x86_64-apple-darwin
+            tauri-args: "--target x86_64-apple-darwin --bundles app,dmg"
+            py-arch: "x86_64"
+          - label: windows-x64
+            os: windows-latest
+            rust-target: ""
+            tauri-args: "--bundles nsis,msi"
+            py-arch: ""
+          - label: linux-x64
+            os: ubuntu-22.04
+            rust-target: ""
+            tauri-args: "--bundles deb,appimage"
+            py-arch: ""
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      # tauri.conf.json version is the single source of truth for installer
+      # filenames; refuse to publish if the pushed tag disagrees with it.
+      - name: Verify tag matches app version
+        if: github.ref_type == 'tag'
+        shell: bash
+        run: |
+          cfg="$(node -p "require('./apps/desktop/src-tauri/tauri.conf.json').version")"
+          tag="${GITHUB_REF_NAME#v}"
+          if [ "$cfg" != "$tag" ]; then
+            echo "::error::tag v$tag does not match tauri.conf.json version $cfg" >&2
+            exit 1
+          fi
+
+      # Tauri v2 Linux system dependencies (webview, AppImage tooling).
+      - name: Install Linux system deps
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev libgtk-3-dev librsvg2-dev \
+            libayatana-appindicator3-dev patchelf \
+            build-essential file libssl-dev
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: apps/desktop/package-lock.json
+
+      - name: Install frontend deps
+        working-directory: apps/desktop
+        run: npm ci
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.rust-target }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: apps/desktop/src-tauri -> target
+
+      - uses: astral-sh/setup-uv@v5
+
+      # The Intel sidecar is an x86_64 binary built on this arm64 runner; it runs
+      # (build + smoke test) under Rosetta 2. Pre-installed on the image, but be
+      # explicit so the leg fails loudly rather than mysteriously if it's absent.
+      - name: Ensure Rosetta 2
+        if: matrix.py-arch == 'x86_64'
+        run: softwareupdate --install-rosetta --agree-to-license
+
+      # PyInstaller can't cross-compile across OS — freeze the sidecar natively
+      # per OS. PINFLOW_PY_ARCH cross-builds x86_64 on Apple Silicon (macOS only).
+      - name: Build Python sidecar
+        shell: bash
+        env:
+          PINFLOW_PY_ARCH: ${{ matrix.py-arch }}
+        run: bash scripts/build_sidecar.sh
+
+      # Fail fast on per-OS packaging gaps before the long Tauri bundle step.
+      - name: Smoke-test frozen sidecar
+        shell: bash
+        run: bash scripts/smoke_sidecar.sh
+
+      # On a tag: create/append a draft GitHub Release with the installers.
+      # On manual dispatch: tagName is empty, so tauri-action only builds.
+      - name: Build app (and release on tag)
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          projectPath: apps/desktop
+          tagName: ${{ github.ref_type == 'tag' && github.ref_name || '' }}
+          releaseName: ${{ github.ref_type == 'tag' && format('Pinflow {0}', github.ref_name) || '' }}
+          releaseDraft: true
+          args: ${{ matrix.tauri-args }}
+
+      # Dry-run / dispatch: keep the installers downloadable from the run.
+      - name: Upload installers (dispatch dry-run)
+        if: github.event_name == 'workflow_dispatch'
+        uses: actions/upload-artifact@v4
+        with:
+          name: pinflow-${{ matrix.label }}
+          if-no-files-found: error
+          path: |
+            apps/desktop/src-tauri/target/**/release/bundle/**/*.dmg
+            apps/desktop/src-tauri/target/**/release/bundle/**/*.exe
+            apps/desktop/src-tauri/target/**/release/bundle/**/*.msi
+            apps/desktop/src-tauri/target/**/release/bundle/**/*.AppImage
+            apps/desktop/src-tauri/target/**/release/bundle/**/*.deb

@@ -17,6 +17,29 @@ from pydantic import BaseModel
 # macOS KiCad 10. Generalize alongside other hardcoded paths when we go cross-platform.
 _KCLI = Path("/Applications/KiCad/KiCad.app/Contents/MacOS/kicad-cli")
 
+# Generous on purpose: the binary's first-ever exec on a machine can stall
+# behind macOS's one-time Gatekeeper/XProtect scan of the (large) KiCad
+# bundle. Steady-state invocations finish in well under a second, so a high
+# ceiling costs nothing — `main._warm_kicad_cli` absorbs the scan at startup,
+# this is the belt to that suspender.
+_TIMEOUT_S = 120
+
+
+def warm_up() -> None:
+    """Run a throwaway `kicad-cli version` to absorb the one-time first-exec
+    scan cost (see _TIMEOUT_S). Failure is fine — real calls will surface
+    real errors."""
+    if not _KCLI.is_file():
+        return
+    try:
+        subprocess.run(
+            [str(_KCLI), "version"],
+            capture_output=True,
+            timeout=_TIMEOUT_S,
+        )
+    except Exception:
+        pass
+
 
 class ErcViolation(BaseModel):
     rule: str  # e.g. "label_dangling", "pin_not_connected", "power_pin_not_driven"
@@ -66,7 +89,7 @@ def export_netlist(sch_path: Path) -> str:
             ],
             capture_output=True,
             text=True,
-            timeout=30,
+            timeout=_TIMEOUT_S,
         )
         if not out.is_file():
             raise RuntimeError(
@@ -116,7 +139,7 @@ def run_erc(sch_text: str) -> ErcReport:
             [str(_KCLI), "sch", "erc", "-o", str(rpt), str(sch)],
             capture_output=True,
             text=True,
-            timeout=30,
+            timeout=_TIMEOUT_S,
         )
         if not rpt.is_file():
             raise RuntimeError(

@@ -13,7 +13,32 @@ model the placer consumes.
 
 from __future__ import annotations
 
+import re
+
 from pydantic import BaseModel, model_validator
+
+# Power-net name conventions, used to derive `is_power` when the producer
+# didn't set it. Agent-built netlists (the add_subcircuit_from_netlist hand-
+# built path) carry only name/endpoints/is_port — without this derivation
+# their rails classify as plain signals, which cascades into wrong part
+# roles, a garbage layout tree, and label-only wiring with no power symbols.
+_GND_NET_RE = re.compile(r"^(GND|AGND|DGND|PGND|GNDA|GNDD|VSS|GROUND|EARTH)", re.I)
+_RAIL_NET_RE = re.compile(
+    r"^\+"  # +5V, +3V3, +BATT — the KiCad power-net convention
+    r"|^(VCC|VDD|VEE|VBUS|VBAT|VSYS|VIN|VOUT|PVIN|AVIN|PVDD|AVDD|VDDA)\d*$"
+    r"|^\d+V\d*$",  # 5V, 3V3, 12V
+    re.I,
+)
+
+
+def is_ground_net_name(name: str) -> bool:
+    """True when `name` follows a recognizable ground-net convention."""
+    return bool(_GND_NET_RE.match(name.strip()))
+
+
+def is_power_net_name(name: str) -> bool:
+    """True when `name` follows a recognizable power/ground rail convention."""
+    return bool(is_ground_net_name(name) or _RAIL_NET_RE.match(name.strip()))
 
 
 class NetlistPart(BaseModel):
@@ -42,6 +67,19 @@ class NetlistNet(BaseModel):
     voltage: float | None = None
     endpoints: list[NetlistEndpoint] = []
     is_port: bool = False      # boundary net exposed for `port_bindings` rebind
+
+    @model_validator(mode="after")
+    def _derive_is_power(self):
+        """Promote `is_power` from the net name when the producer omitted it.
+
+        Promotion only — an explicit `is_power: true` on an oddly-named rail
+        is kept, and a conventional name can never *demote*. This is what
+        keeps hand-built agent netlists (name/endpoints/is_port only) on the
+        same classification path as extract_subgraph / design_spec output.
+        """
+        if not self.is_power and is_power_net_name(self.name):
+            self.is_power = True
+        return self
 
 
 class Netlist(BaseModel):

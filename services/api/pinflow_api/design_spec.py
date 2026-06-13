@@ -141,6 +141,36 @@ def _find_pin(profile_pins, *names: str) -> Optional[str]:
     return None
 
 
+def _norm_pn(s: str) -> str:
+    """Part-number comparison form: case/separator-insensitive.
+
+    Deliberately KEEPS dots — the voltage option in MPNs like `AP2112K-3.3`
+    lives in the dot ("33" would collide with other option codes). Distinct
+    from `graph.builder._norm_mpn` / `symbol_resolver._canon`, which strip
+    all punctuation for looser identity matching.
+    """
+    return re.sub(r"[^A-Z0-9.]", "", s.upper())
+
+
+def _orderable_for(mpn: str, candidate: Optional[str]) -> Optional[str]:
+    """Pick the ordering code, guarding against a wrong-option variant.
+
+    Variants are keyed by *package* pinout, so on a fixed-output regulator
+    every voltage option shares one variant entry — and its `orderable_part`
+    is whichever option the extractor happened to choose as representative.
+    When the user's MPN already encodes the option (e.g. `AP2112K-3.3`), a
+    candidate that isn't an extension of it (`AP2112K-1.2TRG1`) would put the
+    WRONG part in the schematic's ordering fields. Prefer the user's MPN in
+    that case; keep the candidate when it merely adds packaging suffixes
+    (`TPS62840` → `TPS62840DLCR`).
+    """
+    if not candidate:
+        return mpn
+    if _norm_pn(candidate).startswith(_norm_pn(mpn)):
+        return candidate
+    return mpn
+
+
 def build_design_spec(
     *,
     profile: ComponentProfile,
@@ -262,7 +292,10 @@ def build_design_spec(
 
     return DesignSpec(
         mpn=profile.mpn,
-        orderable_part=(variant.orderable_part if variant else profile.orderable_part),
+        orderable_part=_orderable_for(
+            profile.mpn,
+            variant.orderable_part if variant else profile.orderable_part,
+        ),
         variant_code=(variant.package_code if variant else profile.variant_code),
         topology=topology,
         role=role,

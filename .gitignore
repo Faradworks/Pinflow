@@ -25,6 +25,11 @@ apps/desktop/.vite/
 *.log
 npm-debug.log*
 
+# Docs site (apps/docs — Nextra/Next.js)
+apps/docs/.next/
+apps/docs/out/
+apps/docs/.turbo/
+
 # Tauri
 apps/desktop/src-tauri/target/
 apps/desktop/src-tauri/Cargo.lock

@@ -1,0 +1,85 @@
+---
+title: Architecture at a glance
+description: The two-process shape, the agent loop, the staging layer, and the repo layout.
+---
+
+import { Callout, FileTree } from 'nextra/components'
+
+# Architecture at a glance
+
+Pinflow is **two processes talking over local HTTP**:
+
+```
+apps/desktop (Tauri + React + Vite)
+  └── HTTP ──▶ services/api (FastAPI, Python)  @ 127.0.0.1:8787
+                 └── KiCad integration · LLM agent loop · filesystem
+```
+
+The Tauri/Rust shell is intentionally thin. **All the real work — KiCad
+integration, the LLM agent, filesystem mutation — lives in the Python
+service**, so the frontend stays a presentation layer and the logic can move
+between local and hosted backends unchanged. The frontend points at a single
+configurable API URL (default `http://127.0.0.1:8787`).
+
+## The agent loop
+
+The hero path is a chat-driven agent. Your message streams to the backend,
+which runs an Anthropic **tool-use loop**: each turn, the model can call tools
+(read the active schematic, draft a subcircuit, look up parts, ask you a
+question), the backend dispatches them, and the results feed back into the next
+turn until the model finishes or needs your input.
+
+When the agent needs a decision from you, it suspends and surfaces a question
+in the chat; you answer, and the loop resumes where it left off.
+
+## The staging layer
+
+Agent edits never write straight to your `.kicad_sch`. They land in a
+**staged working copy** that you review in the live viewer, then **commit**
+(an atomic write-back to your real file) or **discard**. This is the contract
+that makes the agent safe to let loose on a real project.
+
+<Callout type="info">
+  Pinflow never writes into your project's git history — commit is a plain file
+  write. See [How it works](/users/how-it-works) for the user-facing view.
+</Callout>
+
+## The live viewer
+
+The right pane renders your schematic with
+[KiCanvas](https://kicanvas.org/). It reads the currently-open project and
+prefers the staged working copy when one exists, so you see the agent's
+proposed change before it's committed.
+
+## Repo layout
+
+<FileTree>
+  <FileTree.Folder name="apps" defaultOpen>
+    <FileTree.Folder name="desktop">
+      <FileTree.File name="Tauri + React + Vite shell" />
+    </FileTree.Folder>
+    <FileTree.Folder name="docs">
+      <FileTree.File name="this documentation site (Nextra)" />
+    </FileTree.Folder>
+  </FileTree.Folder>
+  <FileTree.Folder name="services">
+    <FileTree.Folder name="api">
+      <FileTree.File name="FastAPI service: agent loop, KiCad, emit" />
+    </FileTree.Folder>
+  </FileTree.Folder>
+  <FileTree.Folder name="scripts">
+    <FileTree.File name="dev + build helpers (dev.sh, …)" />
+  </FileTree.Folder>
+</FileTree>
+
+<Callout type="info">
+  **Deeper design docs land as subsystems stabilize.** Much of Pinflow is in
+  active development; rather than document internals that are still moving, this
+  site covers the stable shape. As the agent toolbelt, the schematic placer, and
+  the parts pipeline settle, their detailed design docs will be published here.
+</Callout>
+
+## Next steps
+
+- [Local development](/developers/local-dev) — get the app building and running.
+- [Contributing](/developers/contributing) — the PR flow and conventions.

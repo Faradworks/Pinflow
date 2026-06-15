@@ -1,0 +1,86 @@
+---
+title: Local development
+description: Build, run, and debug Pinflow locally.
+---
+
+import { Callout, Steps } from 'nextra/components'
+
+# Local development
+
+## One-time setup
+
+See [Getting started](/users/getting-started) for prerequisites (KiCad 10,
+Python 3.10+, Node.js, Rust, `uv`). Then:
+
+<Steps>
+
+### Backend
+
+```bash
+cd services/api
+uv venv && uv pip install -e .
+```
+
+### Frontend
+
+```bash
+cd apps/desktop
+npm install
+```
+
+### API key
+
+Put `ANTHROPIC_API_KEY=…` into `services/api/.env`.
+
+</Steps>
+
+## The dev loop
+
+Boot the FastAPI service and the Tauri shell (which boots Vite) together:
+
+```bash
+./scripts/dev.sh
+```
+
+### Backend only
+
+Useful when iterating on the Python service:
+
+```bash
+cd services/api
+.venv/bin/uvicorn pinflow_api.main:app --host 127.0.0.1 --port 8787 --reload
+```
+
+### Frontend build / typecheck
+
+```bash
+cd apps/desktop
+npm run build      # tsc + vite build
+npm run tauri dev  # what scripts/dev.sh runs
+```
+
+## Debugging the agent loop
+
+When the agent misbehaves on a prompt and you need to see *why*,
+`services/api/scripts/trace_chat.py` runs the chat loop in-process with a
+full-fidelity trace tap — every prompt, every model response, and every tool
+call's complete input and output (the things the normal streaming path
+truncates or omits):
+
+```bash
+cd services/api
+.venv/bin/python scripts/trace_chat.py --help
+```
+
+<Callout type="warning">
+  The agent can stage **and commit** edits to a real `.kicad_sch`. When tracing
+  a prompt that might commit, point it at a throwaway copy (see the script's
+  `--sch` option) or close KiCad first, so you don't mutate a real project.
+</Callout>
+
+## Tests
+
+The end-to-end smoke scripts under `services/api/scripts/` exercise the
+datasheet → KiCad pipeline and need an API key plus a datasheet fixture. Vendor
+datasheet fixtures are not checked in (IP); regenerate them as described in the
+fixtures README before running those scripts.

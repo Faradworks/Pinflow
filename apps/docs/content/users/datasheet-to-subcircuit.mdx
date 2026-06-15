@@ -1,0 +1,53 @@
+---
+title: 'Guide: datasheet → subcircuit'
+description: The intended flow for turning a datasheet into a placed, wired subcircuit.
+---
+
+import { Callout, Steps } from 'nextra/components'
+
+# Guide: datasheet → subcircuit
+
+<Callout type="warning">
+  **Work in progress.** This is Pinflow's hero flow and it's actively being
+  built — parts of the chain are still stubs. This page describes the intended
+  shape so you know where things are headed; expect it to fill in as the
+  capability matures.
+</Callout>
+
+The goal: **drop a datasheet, get a verified KiCad subcircuit** — symbol,
+sensible passives, and net naming — staged for you to review and wire in.
+
+## The flow
+
+<Steps>
+
+### Provide the part
+
+Attach a datasheet PDF in chat, or name the part (e.g. an MPN). The agent
+extracts a structured profile of the chip — its pinout, recommended passives,
+and key parameters.
+
+### Review the design spec
+
+The agent proposes a design — for a switching regulator, that means the
+feedback divider, inductor, and input/output capacitor choices, derived from
+the datasheet's equations. You review and confirm before anything is placed.
+
+### Place &amp; wire
+
+The agent places the subcircuit and wires it — power rails, decoupling, and the
+supporting passives — then **stages** it.
+
+### Review and commit
+
+The staged block shows up highlighted in the live viewer. You
+[commit or discard](/users/how-it-works#review-before-it-touches-your-files) it
+like any other agent edit.
+
+</Steps>
+
+## What works today
+
+Check the in-app agent for the current state. When a step isn't implemented
+yet, the agent will tell you rather than produce something it can't stand
+behind.

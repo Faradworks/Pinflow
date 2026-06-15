@@ -8,11 +8,15 @@
 const KEY = "pinflow.config";
 
 export type LlmMode = "cloud" | "self";
+/** Hero-loop model. `opus` is the default (strongest); `sonnet` is cheaper/faster. */
+export type AgentModel = "opus" | "sonnet";
 
 export interface PinflowConfig {
   mode: LlmMode;
   /** Anthropic API key — `self` (bring-your-own-key) mode. */
   anthropicKey?: string;
+  /** Agent model preference; defaults to `opus` when unset. */
+  model?: AgentModel;
 }
 
 const DEFAULT_API_BASE: string =
@@ -60,21 +64,21 @@ export function getApiBase(): string {
   return DEFAULT_API_BASE;
 }
 
-/** Headers telling the backend which LLM provider to route a chat turn to.
- *  Empty when nothing applies (→ backend falls back to its own .env key). */
+/** Headers telling the backend which LLM provider + agent model to use for a turn.
+ *  The model header is always sent (defaults to opus); the provider headers are
+ *  added per mode. Provider unset (self-without-key) → backend uses its .env key. */
 export function getLlmHeaders(): Record<string, string> {
   const c = _config;
+  const headers: Record<string, string> = {
+    "X-Pinflow-Agent-Model": c?.model === "sonnet" ? "sonnet" : "opus",
+  };
   if (c?.mode === "self" && c.anthropicKey) {
-    return {
-      "X-Pinflow-LLM-Provider": "self",
-      "X-Anthropic-Api-Key": c.anthropicKey,
-    };
-  }
-  if (c?.mode === "cloud") {
+    headers["X-Pinflow-LLM-Provider"] = "self";
+    headers["X-Anthropic-Api-Key"] = c.anthropicKey;
+  } else if (c?.mode === "cloud") {
     // The session JWT is held by the local service (cloud_session) and attached
     // server-side, so the desktop only flags the provider here.
-    return { "X-Pinflow-LLM-Provider": "pinflow-cloud" };
+    headers["X-Pinflow-LLM-Provider"] = "pinflow-cloud";
   }
-  // unset / self-without-key: the local service uses its own configured .env key.
-  return {};
+  return headers;
 }

@@ -54,21 +54,31 @@ const SUGGESTIONS = [
 // this is the in-flight spend for the current request, incl. tool calls). BYO-key
 // accounts have no credits — they pay Anthropic directly — so they get a `~` USD
 // estimate from public list prices instead.
+function fmtTokens(n: number): string {
+  if (n >= 1e6) return `${(n / 1e6).toFixed(2)}M`;
+  if (n >= 1e3) return `${(n / 1e3).toFixed(1)}k`;
+  return String(n);
+}
+
 function CostMeterLine({ cost, cloudMode }: { cost: CostInfo; cloudMode: boolean }) {
   const showCredits = cloudMode && !cost.estimated;
-  const hasSpend = showCredits ? cost.requestCredits > 0 : cost.requestUsd > 0;
-  if (!hasSpend) return null;
-  const primary = showCredits
-    ? `${cost.requestCredits.toFixed(2)} cr this request`
-    : `~$${cost.requestUsd.toFixed(cost.requestUsd < 0.1 ? 4 : 3)} this request`;
+  if (cost.requestTokens <= 0 && cost.requestCredits <= 0 && cost.requestUsd <= 0) return null;
+  // Cloud → authoritative credits; BYOK → a ~USD estimate. Token count shown for
+  // both (BYOK users care about raw tokens; cloud users get credits + tokens).
+  const money = showCredits
+    ? `${cost.requestCredits.toFixed(2)} cr`
+    : `~$${cost.requestUsd.toFixed(cost.requestUsd < 0.1 ? 4 : 3)}`;
   const session =
     showCredits && cost.conversationCredits > cost.requestCredits + 1e-9
       ? ` · ${cost.conversationCredits.toFixed(2)} cr session`
       : "";
   return (
-    <div style={meterStyle} title={showCredits ? "From Pinflow Cloud" : "Estimated from token usage"}>
+    <div
+      style={meterStyle}
+      title={`${cost.requestInputTokens.toLocaleString()} in + ${cost.requestOutputTokens.toLocaleString()} out${showCredits ? " · from Pinflow Cloud" : " · USD estimated from token usage"}`}
+    >
       <span style={{ color: "var(--accent)" }}>⚡</span>
-      <span>{primary}</span>
+      <span>{money} · {fmtTokens(cost.requestTokens)} tok this request</span>
       {session && <span style={{ color: "var(--muted)" }}>{session}</span>}
     </div>
   );

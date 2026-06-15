@@ -3,19 +3,21 @@
 
 import type { ReactNode } from "react";
 
-import type { LlmMode, PinflowConfig } from "../../lib/config";
+import type { AgentModel, LlmMode, PinflowConfig } from "../../lib/config";
 import { CloudSignIn } from "./CloudSignIn";
 import { KeyField } from "./KeyField";
 
 export interface ProviderDraft {
   mode: LlmMode | null;
   anthropicKey: string;
+  model: AgentModel;
 }
 
 export function configToDraft(cfg: PinflowConfig | null): ProviderDraft {
   return {
     mode: cfg?.mode ?? null,
     anthropicKey: cfg?.anthropicKey ?? "",
+    model: cfg?.model ?? "opus",
   };
 }
 
@@ -28,11 +30,11 @@ export function draftToConfig(
   keyInvalid = false,
 ): PinflowConfig | null {
   if (d.mode === "cloud") {
-    return cloudSignedIn ? { mode: "cloud" } : null;
+    return cloudSignedIn ? { mode: "cloud", model: d.model } : null;
   }
   if (d.mode === "self") {
     const key = d.anthropicKey.trim();
-    return key && !keyInvalid ? { mode: "self", anthropicKey: key } : null;
+    return key && !keyInvalid ? { mode: "self", anthropicKey: key, model: d.model } : null;
   }
   return null;
 }
@@ -98,6 +100,77 @@ export function ProviderForm({
       {value.mode === "cloud" && (
         <CloudSignIn onSignedInChange={onCloudSignedInChange} />
       )}
+
+      <ModelSelect value={value.model} onChange={(m) => set({ model: m })} />
+    </div>
+  );
+}
+
+const MODELS: { id: AgentModel; title: string; blurb: string }[] = [
+  { id: "opus", title: "Opus", blurb: "Strongest — best for complex schematics" },
+  { id: "sonnet", title: "Sonnet", blurb: "Faster & cheaper — fewer tokens/credits" },
+];
+
+function ModelSelect({
+  value,
+  onChange,
+}: {
+  value: AgentModel;
+  onChange: (m: AgentModel) => void;
+}) {
+  return (
+    <div style={{ marginTop: 16 }}>
+      <div
+        style={{
+          fontSize: 12,
+          fontWeight: 600,
+          color: "var(--ink-2)",
+          marginBottom: 8,
+          display: "flex",
+          gap: 6,
+          alignItems: "baseline",
+        }}
+      >
+        Model
+        <span style={{ fontSize: 11, fontWeight: 400, color: "var(--muted)" }}>
+          · used for the chat agent
+        </span>
+      </div>
+      <div style={{ display: "flex", gap: 8 }}>
+        {MODELS.map((m) => {
+          const selected = value === m.id;
+          return (
+            <button
+              key={m.id}
+              type="button"
+              onClick={() => onChange(m.id)}
+              style={{
+                flex: 1,
+                textAlign: "left",
+                padding: "10px 12px",
+                borderRadius: 9,
+                cursor: "pointer",
+                background: selected ? "var(--accent-soft)" : "var(--panel-2)",
+                border: `1px solid ${selected ? "var(--accent)" : "var(--line)"}`,
+                color: "var(--ink)",
+                transition: "border-color 120ms, background 120ms",
+              }}
+            >
+              <div style={{ fontSize: 12.5, fontWeight: 600, display: "flex", gap: 6 }}>
+                {m.title}
+                {m.id === "opus" && (
+                  <span style={{ fontSize: 10, fontWeight: 500, color: "var(--muted)" }}>
+                    default
+                  </span>
+                )}
+              </div>
+              <div style={{ fontSize: 11, lineHeight: 1.35, color: "var(--muted)", marginTop: 2 }}>
+                {m.blurb}
+              </div>
+            </button>
+          );
+        })}
+      </div>
     </div>
   );
 }

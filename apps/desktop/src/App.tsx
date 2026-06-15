@@ -171,6 +171,10 @@ function App() {
         estimated: !!e.estimated,
         balance: typeof e.balance === "number" ? e.balance : null,
         provider: typeof e.provider === "string" ? e.provider : "self",
+        requestTokens: e.request_tokens ?? 0,
+        requestInputTokens: e.request_input_tokens ?? 0,
+        requestOutputTokens: e.request_output_tokens ?? 0,
+        conversationTokens: e.conversation_tokens ?? 0,
       });
       return;
     }
@@ -298,7 +302,9 @@ function App() {
     // Fresh user message → the backend resets its per-request meter; mirror that
     // so the line shows this request from 0 (keeping the session total). Resume
     // paths (above, and onAnswer) deliberately don't reset — the request continues.
-    setCost((c) => (c ? { ...c, requestCredits: 0, requestUsd: 0, estimated: false } : c));
+    setCost((c) =>
+      c ? { ...c, requestCredits: 0, requestUsd: 0, estimated: false, requestTokens: 0, requestInputTokens: 0, requestOutputTokens: 0 } : c,
+    );
     streamRef.current = api.chatStream(
       text,
       convId,

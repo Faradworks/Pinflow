@@ -113,6 +113,20 @@ def test_meter_self_path_usd_estimate():
     assert _approx(m.conversation_usd, 0.75)  # conversation total survives reset
 
 
+def test_token_tracking():
+    m = cost.CostMeter()
+    u = _Usage(input_tokens=100, output_tokens=50, cache_creation_input_tokens=10, cache_read_input_tokens=200)
+    m.record(charged=None, balance=None, usd=0.01, usage=u)   # self/BYOK path
+    assert m.request_input_tokens == 100 and m.request_output_tokens == 50
+    assert m.request_cache_tokens == 210                      # creation + read
+    assert m.request_tokens == 360 and m.conversation_tokens == 360
+    # Cloud path tracks tokens too (alongside the balance-delta credits).
+    m.record(charged=0.5, balance=9.5, usd=0.0, usage=_Usage(input_tokens=40))
+    assert m.request_tokens == 400 and m.conversation_tokens == 400
+    m.reset_request()
+    assert m.request_tokens == 0 and m.conversation_tokens == 400  # conversation survives reset
+
+
 def test_credit_ratio_observed_not_hardcoded():
     m = cost.CostMeter()
     assert m.credit_ratio == 1.0  # default until a real charge is seen

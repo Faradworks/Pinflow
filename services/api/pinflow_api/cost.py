@@ -102,6 +102,17 @@ class CostMeter:
     request_estimated: bool = False
     conversation_estimated: bool = False
     approved_ceiling: Optional[float] = None
+    # Token counts (input / output / cache = creation+read), shown to the user
+    # alongside credits (cloud) or USD (BYOK). Provider-agnostic — always tracked
+    # from the response usage. NB: this is the agent loop's OWN calls; tokens a
+    # tool spends internally (e.g. parse_datasheet's PDF read) aren't visible here
+    # — on cloud those still land in the balance-delta credits, just not in tokens.
+    request_input_tokens: int = 0
+    request_output_tokens: int = 0
+    request_cache_tokens: int = 0
+    conversation_input_tokens: int = 0
+    conversation_output_tokens: int = 0
+    conversation_cache_tokens: int = 0
     # Observed credits-per-USD, accumulated from real gateway charges so the
     # forward gate estimate (gate_estimate) can convert a USD projection into
     # credits WITHOUT hardcoding the gateway's margin — we measure it instead.
@@ -113,6 +124,18 @@ class CostMeter:
         self.request_usd = 0.0
         self.request_estimated = False
         self.approved_ceiling = None
+        self.request_input_tokens = 0
+        self.request_output_tokens = 0
+        self.request_cache_tokens = 0
+
+    @property
+    def request_tokens(self) -> int:
+        return self.request_input_tokens + self.request_output_tokens + self.request_cache_tokens
+
+    @property
+    def conversation_tokens(self) -> int:
+        return (self.conversation_input_tokens + self.conversation_output_tokens
+                + self.conversation_cache_tokens)
 
     @property
     def credit_ratio(self) -> float:
@@ -120,9 +143,28 @@ class CostMeter:
         charge is seen — the markup is the gateway's; we measure, never hardcode it."""
         return self._charged_sum / self._usd_sum if self._usd_sum > 0 else 1.0
 
-    def record(self, *, charged: Optional[float], balance: Optional[float], usd: float) -> None:
+    def record(
+        self,
+        *,
+        charged: Optional[float],
+        balance: Optional[float],
+        usd: float,
+        usage: Any = None,
+    ) -> None:
         """Fold one LLM call into the meter. `balance`/`charged` from the gateway
-        headers (cloud), `usd` the local estimate (used only off-gateway)."""
+        headers (cloud), `usd` the local estimate (used only off-gateway), `usage`
+        the Anthropic usage object (for token counts; provider-agnostic)."""
+        if usage is not None:
+            inp = _int(getattr(usage, "input_tokens", 0))
+            out = _int(getattr(usage, "output_tokens", 0))
+            cache = (_int(getattr(usage, "cache_creation_input_tokens", 0))
+                     + _int(getattr(usage, "cache_read_input_tokens", 0)))
+            self.request_input_tokens += inp
+            self.request_output_tokens += out
+            self.request_cache_tokens += cache
+            self.conversation_input_tokens += inp
+            self.conversation_output_tokens += out
+            self.conversation_cache_tokens += cache
         if balance is not None:
             # Authoritative cloud path. Reconstruct the pre-call balance to anchor
             # the deltas on first sight of each scope.

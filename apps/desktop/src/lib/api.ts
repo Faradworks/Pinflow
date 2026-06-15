@@ -29,6 +29,11 @@ export type CostInfo = {
   estimated: boolean;
   balance: number | null;
   provider: string;
+  // Token counts for the current request (the agent loop's own calls).
+  requestTokens: number;
+  requestInputTokens: number;
+  requestOutputTokens: number;
+  conversationTokens: number;
 };
 
 export type ActiveProject =

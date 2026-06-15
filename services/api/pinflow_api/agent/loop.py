@@ -513,9 +513,10 @@ def _drive(
     tripped: Optional[tuple[str, str]] = None
     tripped_result: Optional[dict] = None
 
-    # Hero path runs on the stronger agent model (Opus by default); extraction/
-    # emit stay on settings.anthropic_model.
-    model = settings.anthropic_agent_model or settings.anthropic_model
+    # Hero path runs on the user-chosen agent model (Opus by default, or Sonnet
+    # via the X-Pinflow-Agent-Model header); extraction/emit stay on
+    # settings.anthropic_model.
+    model = llm.agent_model_id(state.llm)
     provider = llm.provider_of(state.llm)  # labels the live cost meter
 
     for turn in range(1, _MAX_TURNS + 1):
@@ -584,9 +585,10 @@ def _drive(
         # let metering break a turn.
         cost_event = None
         try:
+            usage = getattr(response, "usage", None)
             charged, balance = cost.parse_gateway_credits(getattr(raw, "headers", None))
-            usd = cost.call_cost_usd(model, getattr(response, "usage", None))
-            state.cost.record(charged=charged, balance=balance, usd=usd)
+            usd = cost.call_cost_usd(model, usage)
+            state.cost.record(charged=charged, balance=balance, usd=usd, usage=usage)
             cost_event = ev.ev_cost(state.cost, model=model, provider=provider)
         except Exception as e:  # pragma: no cover — defensive
             _trace(trace, t="error", turn=turn, where="cost_meter", error=str(e))

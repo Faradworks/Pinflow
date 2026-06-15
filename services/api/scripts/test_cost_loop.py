@@ -49,14 +49,17 @@ class _FakeRaw:
 
 
 class _FakeClient:
-    """messages.with_raw_response.create(...) pops the next queued response."""
+    """messages.with_raw_response.create(...) pops the next queued response and
+    records the `model` kwarg (so tests can assert the resolved agent model)."""
 
     def __init__(self, queue):
         self._queue = queue
+        self.last_model = None
         outer = self
 
         class _WRR:
-            def create(self, **_kwargs):
+            def create(self, **kwargs):
+                outer.last_model = kwargs.get("model")
                 resp, headers = outer._queue.pop(0)
                 return _FakeRaw(resp, headers)
 
@@ -66,12 +69,18 @@ class _FakeClient:
         self.messages = _Messages()
 
 
+# The single fake client a _patch() set up uses, so tests can read .last_model.
+_LAST_CLIENT = None
+
+
 def _patch(queue):
     """Patch the loop's LLM seam to use a fake client over `queue`, and stub the
     context block so we don't pull in schematic machinery. Returns an undo fn."""
+    global _LAST_CLIENT
+    _LAST_CLIENT = _FakeClient(queue)
     saved = (llm.available, llm.make_client, llm.provider_of, agent_loop.build_context_block)
     llm.available = lambda cfg=None: True
-    llm.make_client = lambda cfg=None: _FakeClient(queue)
+    llm.make_client = lambda cfg=None: _LAST_CLIENT
     llm.provider_of = lambda cfg=None: "pinflow-cloud"
     agent_loop.build_context_block = lambda state: "ctx"
 
@@ -79,6 +88,38 @@ def _patch(queue):
         (llm.available, llm.make_client, llm.provider_of, agent_loop.build_context_block) = saved
 
     return undo
+
+
+def test_cost_event_includes_tokens():
+    # The cost event carries token counts (request_tokens + in/out) for both paths.
+    queue = [(_resp("end_turn", [_text("done")], _usage(inp=300, out=120)), None)]
+    undo = _patch(queue)
+    try:
+        events = list(agent_loop.run_chat("c_tok", "hi"))
+    finally:
+        undo()
+    ce = next(e for e in events if e.get("kind") == "cost")
+    assert ce["request_tokens"] == 420, ce
+    assert ce["request_input_tokens"] == 300 and ce["request_output_tokens"] == 120, ce
+    assert ce["conversation_tokens"] == 420, ce
+
+
+def test_agent_model_selection():
+    from pinflow_api.settings import settings
+    # Default (no agent_model) → the Opus agent model.
+    undo = _patch([(_resp("end_turn", [_text("ok")], _usage()), None)])
+    try:
+        list(agent_loop.run_chat("c_m1", "hi"))
+        assert _LAST_CLIENT.last_model == settings.anthropic_agent_model
+    finally:
+        undo()
+    # Sonnet alias → settings.anthropic_model.
+    undo = _patch([(_resp("end_turn", [_text("ok")], _usage()), None)])
+    try:
+        list(agent_loop.run_chat("c_m2", "hi", llm_config=llm.LLMConfig(agent_model="sonnet")))
+        assert _LAST_CLIENT.last_model == settings.anthropic_model
+    finally:
+        undo()
 
 
 def test_cost_event_emitted_on_estimate_path():

@@ -78,6 +78,11 @@ def ev_cost(meter, *, model: str, provider: str) -> dict:
         "balance": meter.last_balance,
         "model": model,
         "provider": provider,
+        # Token counts (agent loop's own calls), shown alongside credits/USD.
+        "request_tokens": meter.request_tokens,
+        "request_input_tokens": meter.request_input_tokens,
+        "request_output_tokens": meter.request_output_tokens,
+        "conversation_tokens": meter.conversation_tokens,
     }
 
 

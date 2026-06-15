@@ -10,14 +10,25 @@ Tauri's webview linkage) cannot cross-compile.
 | Target | Runner | Installer(s) |
 | --- | --- | --- |
 | macOS Apple Silicon | `macos-14` | `.dmg` (aarch64) |
-| macOS Intel | `macos-13` | `.dmg` (x86_64) |
+| macOS Intel | `macos-14` (Rosetta cross-build) | `.dmg` (x86_64) |
 | Windows x64 | `windows-latest` | `.exe` (NSIS) + `.msi` |
 | Linux x64 | `ubuntu-22.04` | `.AppImage` + `.deb` |
+
+The Intel macOS leg is cross-built on an Apple Silicon runner (Rust `x86_64`
+target + an `x86_64` PyInstaller sidecar frozen under Rosetta 2, via
+`PINFLOW_PY_ARCH=x86_64`) to avoid GitHub's scarce Intel runners.
 
 Each leg: freeze the FastAPI sidecar with PyInstaller
 ([`scripts/build_sidecar.sh`](../scripts/build_sidecar.sh)) → smoke-test it
 against `/health` ([`scripts/smoke_sidecar.sh`](../scripts/smoke_sidecar.sh)) →
 bundle the Tauri app → attach to the release.
+
+The bundled sidecar is declared as a Tauri resource in a **build-only config
+overlay** ([`tauri.bundle.conf.json`](../apps/desktop/src-tauri/tauri.bundle.conf.json)),
+merged in with `tauri build --config …`. It's kept out of the base
+`tauri.conf.json` so `tauri dev` — which doesn't freeze the sidecar — doesn't
+fail on the missing resource. The local equivalent of a release build is
+[`scripts/build_desktop.sh`](../scripts/build_desktop.sh).
 
 ## Cut a release
 

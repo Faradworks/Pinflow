@@ -27,7 +27,6 @@
   "bundle": {
     "active": true,
     "targets": ["app", "dmg", "nsis", "msi", "deb", "appimage"],
-    "resources": ["binaries/pinflow-api/**/*"],
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",

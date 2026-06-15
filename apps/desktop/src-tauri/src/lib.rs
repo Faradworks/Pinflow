@@ -4,6 +4,11 @@
 // 127.0.0.1:8787 with production config injected via env, and kills it on exit.
 // The frontend talks to that local service; all KiCad / LLM / agent work lives
 // there.
+//
+// In `tauri dev` the sidecar is NOT bundled (its resource is build-only — see
+// tauri.bundle.conf.json) because scripts/dev.sh runs the backend itself
+// (uvicorn from the venv, on the same 127.0.0.1:8787). So in dev we skip the
+// spawn entirely rather than panic on the missing resource.
 
 use std::process::{Child, Command, Stdio};
 use std::sync::Mutex;
@@ -19,6 +24,12 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
         .setup(|app| {
+            // Dev runs the backend out-of-process (scripts/dev.sh → uvicorn), and
+            // the sidecar isn't bundled, so there's nothing to spawn or reap here.
+            if tauri::is_dev() {
+                return Ok(());
+            }
+
             // The onedir sidecar is bundled under Resources/ (exe + _internal/
             // sibling). The glob form preserves the path relative to src-tauri,
             // so probe both likely spots for the executable — and on Windows

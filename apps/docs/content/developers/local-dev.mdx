@@ -42,6 +42,15 @@ Boot the FastAPI service and the Tauri shell (which boots Vite) together:
 ./scripts/dev.sh
 ```
 
+<Callout type="warning">
+  In dev the Tauri shell does **not** bundle or spawn the Python backend — the
+  packaged-app sidecar (a PyInstaller freeze) is a build-only resource. `dev.sh`
+  runs the backend itself as a separate `uvicorn` process on the same
+  `127.0.0.1:8787`. Running `npm run tauri dev` on its own gives you the shell
+  with **no backend**; use `dev.sh` (or start `uvicorn` yourself) for the full
+  loop.
+</Callout>
+
 ### Backend only
 
 Useful when iterating on the Python service:
@@ -56,7 +65,7 @@ cd services/api
 ```bash
 cd apps/desktop
 npm run build      # tsc + vite build
-npm run tauri dev  # what scripts/dev.sh runs
+npm run tauri dev  # shell + Vite only — no backend; use scripts/dev.sh for the full loop
 ```
 
 ## Debugging the agent loop

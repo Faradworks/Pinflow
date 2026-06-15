@@ -2,6 +2,7 @@ import { useEffect, useRef } from "react";
 import type { CSSProperties } from "react";
 
 import type { CostInfo } from "../../lib/api";
+import { useEasedNumber } from "../../lib/useEasedNumber";
 import type { KicadProject } from "../window-shell/KicadStatusChip";
 import { ChatInput, type StagedAttachment } from "./ChatInput";
 import { EmptyState } from "./EmptyState";
@@ -55,22 +56,32 @@ const SUGGESTIONS = [
 // accounts have no credits — they pay Anthropic directly — so they get a `~` USD
 // estimate from public list prices instead.
 function fmtTokens(n: number): string {
-  if (n >= 1e6) return `${(n / 1e6).toFixed(2)}M`;
-  if (n >= 1e3) return `${(n / 1e3).toFixed(1)}k`;
-  return String(n);
+  const v = Math.round(n);
+  if (v >= 1e6) return `${(v / 1e6).toFixed(2)}M`;
+  if (v >= 1e3) return `${(v / 1e3).toFixed(1)}k`;
+  return String(v);
 }
 
 function CostMeterLine({ cost, cloudMode }: { cost: CostInfo; cloudMode: boolean }) {
   const showCredits = cloudMode && !cost.estimated;
+  // Cosmetic easing: the meter only gets a new value per completed call (the
+  // gateway is non-streaming), so ease the readout up to each new number instead
+  // of snapping. Hooks must run unconditionally → they precede the early return.
+  const tokens = useEasedNumber(cost.requestTokens);
+  const credits = useEasedNumber(cost.requestCredits);
+  const usd = useEasedNumber(cost.requestUsd);
+  const sessionCredits = useEasedNumber(cost.conversationCredits);
   if (cost.requestTokens <= 0 && cost.requestCredits <= 0 && cost.requestUsd <= 0) return null;
   // Cloud → authoritative credits; BYOK → a ~USD estimate. Token count shown for
   // both (BYOK users care about raw tokens; cloud users get credits + tokens).
+  // Decimal precision keys off the real target (not the eased value) so it doesn't
+  // flip mid-animation as the number crosses the $0.10 threshold.
   const money = showCredits
-    ? `${cost.requestCredits.toFixed(2)} cr`
-    : `~$${cost.requestUsd.toFixed(cost.requestUsd < 0.1 ? 4 : 3)}`;
+    ? `${credits.toFixed(2)} cr`
+    : `~$${usd.toFixed(cost.requestUsd < 0.1 ? 4 : 3)}`;
   const session =
     showCredits && cost.conversationCredits > cost.requestCredits + 1e-9
-      ? ` · ${cost.conversationCredits.toFixed(2)} cr session`
+      ? ` · ${sessionCredits.toFixed(2)} cr session`
       : "";
   return (
     <div
@@ -78,7 +89,7 @@ function CostMeterLine({ cost, cloudMode }: { cost: CostInfo; cloudMode: boolean
       title={`${cost.requestInputTokens.toLocaleString()} in + ${cost.requestOutputTokens.toLocaleString()} out${showCredits ? " · from Pinflow Cloud" : " · USD estimated from token usage"}`}
     >
       <span style={{ color: "var(--accent)" }}>⚡</span>
-      <span>{money} · {fmtTokens(cost.requestTokens)} tok this request</span>
+      <span>{money} · {fmtTokens(tokens)} tok this request</span>
       {session && <span style={{ color: "var(--muted)" }}>{session}</span>}
     </div>
   );

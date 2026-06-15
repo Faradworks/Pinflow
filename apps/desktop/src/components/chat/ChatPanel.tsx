@@ -1,5 +1,7 @@
 import { useEffect, useRef } from "react";
+import type { CSSProperties } from "react";
 
+import type { CostInfo } from "../../lib/api";
 import type { KicadProject } from "../window-shell/KicadStatusChip";
 import { ChatInput, type StagedAttachment } from "./ChatInput";
 import { EmptyState } from "./EmptyState";
@@ -21,6 +23,8 @@ type Props = {
   onRemoveAttachment: (key: string) => void;
   isStreaming: boolean;
   onNewSession: () => void;
+  cost?: CostInfo | null;
+  cloudMode?: boolean;
 };
 
 // For an ask_user tool message at index `i`, return whether the linked
@@ -45,6 +49,42 @@ const SUGGESTIONS = [
   "Add JTAG/SWD header",
 ];
 
+// Live running-spend line above the composer. Cloud accounts read authoritative
+// credits from the gateway (the remaining balance lives in the title-bar chip;
+// this is the in-flight spend for the current request, incl. tool calls). BYO-key
+// accounts have no credits — they pay Anthropic directly — so they get a `~` USD
+// estimate from public list prices instead.
+function CostMeterLine({ cost, cloudMode }: { cost: CostInfo; cloudMode: boolean }) {
+  const showCredits = cloudMode && !cost.estimated;
+  const hasSpend = showCredits ? cost.requestCredits > 0 : cost.requestUsd > 0;
+  if (!hasSpend) return null;
+  const primary = showCredits
+    ? `${cost.requestCredits.toFixed(2)} cr this request`
+    : `~$${cost.requestUsd.toFixed(cost.requestUsd < 0.1 ? 4 : 3)} this request`;
+  const session =
+    showCredits && cost.conversationCredits > cost.requestCredits + 1e-9
+      ? ` · ${cost.conversationCredits.toFixed(2)} cr session`
+      : "";
+  return (
+    <div style={meterStyle} title={showCredits ? "From Pinflow Cloud" : "Estimated from token usage"}>
+      <span style={{ color: "var(--accent)" }}>⚡</span>
+      <span>{primary}</span>
+      {session && <span style={{ color: "var(--muted)" }}>{session}</span>}
+    </div>
+  );
+}
+
+const meterStyle: CSSProperties = {
+  display: "flex",
+  alignItems: "center",
+  gap: 6,
+  marginBottom: 8,
+  padding: "0 2px",
+  fontSize: 11,
+  fontFamily: "var(--font-mono)",
+  color: "var(--muted)",
+};
+
 export function ChatPanel({
   messages,
   draft,
@@ -58,6 +98,8 @@ export function ChatPanel({
   onRemoveAttachment,
   isStreaming,
   onNewSession,
+  cost,
+  cloudMode,
 }: Props) {
   const logRef = useRef<HTMLDivElement>(null);
   const started = messages.length > 0;
@@ -164,6 +206,7 @@ export function ChatPanel({
       </div>
 
       <div style={{ padding: "12px 18px 16px", flexShrink: 0 }}>
+        {cost && <CostMeterLine cost={cost} cloudMode={!!cloudMode} />}
         <ChatInput
           value={draft}
           onChange={onDraftChange}

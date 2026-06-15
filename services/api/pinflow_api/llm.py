@@ -131,6 +131,13 @@ def current() -> Optional[LLMConfig]:
     return _current.get()
 
 
+def provider_of(cfg: Optional[LLMConfig] = None) -> str:
+    """Resolved provider name (`self` | `pinflow-cloud`) for `cfg`. Public wrapper
+    over `_resolve` for callers (e.g. cost metering) that only need the provider,
+    not a constructed client."""
+    return _resolve(cfg).provider
+
+
 def config_from_headers(headers) -> Optional[LLMConfig]:
     """Build an LLMConfig from request headers, or None when no LLM-routing
     header is present (preserving the pure-settings path).

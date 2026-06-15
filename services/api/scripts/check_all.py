@@ -26,6 +26,8 @@ FIXTURES = API_DIR / "tests" / "fixtures"
 SMOKE_SCRIPTS = [
     "scripts/test_agent_netlist.py",
     "scripts/test_ask_user_dedup.py",
+    "scripts/test_cost.py",
+    "scripts/test_cost_loop.py",
     "scripts/check_determinism.py",
     "scripts/test_route.py",
 ]

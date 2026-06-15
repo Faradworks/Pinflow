@@ -5,6 +5,15 @@ export type Question = {
   answer?: string;
 };
 
+// Fuzzy "cost to finish from here" range shown on a Confirm/Discard gate.
+// `credits` on the cloud path, `usd` on self/BYOK. From the backend ev_ai cost.
+export type GateCost = {
+  unit: "credits" | "usd";
+  lo: number;
+  hi: number;
+  balance: number | null;
+};
+
 export type DiffRow = {
   sym: "+" | "-" | "~";
   ref: string;
@@ -63,6 +72,7 @@ export type Message =
       diff?: DiffRow[];
       confirm?: boolean;
       locked?: boolean;
+      cost?: GateCost | null;
     }
   | { id: string; kind: "thinking"; text: string; streaming: boolean }
   | { id: string; kind: "tool"; tool: string; title: string; meta: ToolMetaRow[]; live?: boolean }

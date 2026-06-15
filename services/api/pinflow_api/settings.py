@@ -47,5 +47,12 @@ class Settings(BaseSettings):
     # path). Non-secret by design: a publishable key ships in frontend code.
     pinflow_clerk_publishable_key: str = ""
 
+    # Per-request LLM spend cap, in credits. When > 0, the agent loop pauses and
+    # asks the user to Continue/Stop the FIRST time a single user message's running
+    # cost crosses this ceiling; Continue approves the rest of that request (it
+    # won't ask again until the next message). 0 disables the gate — the live meter
+    # still shows. See the cost-cap flow in agent/loop.py and pinflow_api/cost.py.
+    pinflow_credit_cap_per_request: float = 0.0
+
 
 settings = Settings()

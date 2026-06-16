@@ -43,8 +43,12 @@ Rect = tuple[float, float, float, float]  # x0, y0, x1, y1
 _EPS = 1e-6
 _GRID = 2.54
 _W_OVERLAP = 1000.0   # a foreign collinear overlap — a short; avoid at all cost
+_W_KEEPOUT = 500.0    # a segment crossing a hard keep-out (the IC body) — never
+                      # acceptable for readability, but still below a short, so
+                      # the router detours around the IC yet never trades a
+                      # genuine short to do it.
 _W_CROSS = 10.0       # one wire-wire crossing — readability only
-_W_BODY = 4.0         # one segment cutting through a component body
+_W_BODY = 4.0         # one segment cutting through a (soft) component body
 _W_STUB = 6.0         # per missing stub — corner landing flush on a pin
 _W_LEN = 0.01         # per mm — a tie-breaker only
 _MAX_Z = 6            # cap on Z-route midpoints tried per edge
@@ -198,7 +202,7 @@ def _corners(route: list[Seg]) -> list[Pt]:
 
 def _score(
     route: list[Seg], net: str, placed: list[tuple[str, Seg]],
-    foreign_pins: list[Pt], bodies: list[Rect],
+    foreign_pins: list[Pt], bodies: list[Rect], keepouts: list[Rect],
 ) -> float:
     # A foreign collinear overlap, or a segment passing over a foreign wired
     # pin, both short two nets — weighted identically and far above the
@@ -208,6 +212,7 @@ def _score(
     pin_hit = sum(1 for s in route for p in foreign_pins if _interior(p, s))
     cross = sum(1 for s in route for (_pn, e) in placed if _crosses(s, e))
     body = sum(1 for s in route for r in bodies if _seg_hits_rect(s, r))
+    keep = sum(1 for s in route for r in keepouts if _seg_hits_rect(s, r))
     length = sum(_seg_len(s) for s in route)
     # Stub penalty: a corner sitting flush on a pin (first or last segment
     # shorter than one grid step) reads as a wire bending at the pin instead
@@ -218,8 +223,9 @@ def _score(
             stub_miss += 1
         if _seg_len(route[-1]) + _EPS < _STUB_MIN:
             stub_miss += 1
-    return (_W_OVERLAP * (overlap + pin_hit) + _W_CROSS * cross
-            + _W_BODY * body + _W_STUB * stub_miss + _W_LEN * length)
+    return (_W_OVERLAP * (overlap + pin_hit) + _W_KEEPOUT * keep
+            + _W_CROSS * cross + _W_BODY * body
+            + _W_STUB * stub_miss + _W_LEN * length)
 
 
 def _hint_route(a: Pt, b: Pt, hint_y: float) -> list[Seg] | None:
@@ -247,7 +253,7 @@ def _hint_route(a: Pt, b: Pt, hint_y: float) -> list[Seg] | None:
 def _route_edge(
     a: Pt, b: Pt, net: str, placed: list[tuple[str, Seg]],
     blocked: list[Pt], foreign_pins: list[Pt], bodies: list[Rect],
-    hint_y: float | None = None,
+    keepouts: list[Rect], hint_y: float | None = None,
 ) -> list[Seg]:
     """Best orthogonal route a→b: corners clear of `blocked`, then lowest
     score (foreign overlap / over-pin ≫ crossings ≫ body intrusion ≫ length).
@@ -269,13 +275,14 @@ def _route_edge(
         if not any(_same(c, p) for c in _corners(r) for p in blocked)
     ]
     return min(legal or cands,
-               key=lambda r: _score(r, net, placed, foreign_pins, bodies))
+               key=lambda r: _score(r, net, placed, foreign_pins,
+                                    bodies, keepouts))
 
 
 def _route_tree(
     upts: list[Pt], net: str, placed: list[tuple[str, Seg]],
     blocked: list[Pt], foreign_pins: list[Pt], bodies: list[Rect],
-    hint_y: float | None = None,
+    keepouts: list[Rect], hint_y: float | None = None,
 ) -> tuple[list[Seg], list[Pt]]:
     """Wire `upts` as a crossing-aware spanning tree, grown edge by edge:
     each step adds the out-of-tree pin whose best route to the in-tree pins
@@ -304,8 +311,9 @@ def _route_tree(
                 if in_tree[j]:
                     continue
                 route = _route_edge(upts[i], upts[j], net, placed,
-                                    blocked, foreign_pins, bodies, hint_y)
-                sc = _score(route, net, placed, foreign_pins, bodies)
+                                    blocked, foreign_pins, bodies, keepouts,
+                                    hint_y)
+                sc = _score(route, net, placed, foreign_pins, bodies, keepouts)
                 if best is None or sc < best[0]:
                     best = (sc, route, j)
         assert best is not None
@@ -330,10 +338,14 @@ def route_nets(
     all_pins: list[Pt],
     bodies: list[Rect] | None = None,
     rail_y_hints: dict[str, float] | None = None,
+    keepouts: list[Rect] | None = None,
 ) -> list[RoutedNet]:
     """Route every net. `nets` is (name, pin-coords); `all_pins` is every pin
     in the schematic (corners must dodge foreign ones); `bodies` are component
-    bounding boxes to route around. Returns one `RoutedNet` per input net.
+    bounding boxes to route around (soft). `keepouts` are hard no-go rects (the
+    IC body): a segment crossing one is penalised an order above a crossing, so
+    the router detours around it but never trades a short to do so. Returns one
+    `RoutedNet` per input net.
 
     `rail_y_hints` (optional): per-net Y values that the router should prefer
     as the horizontal-trunk row for that net. Each edge of a hinted net gets
@@ -343,6 +355,7 @@ def route_nets(
     archetype, where bodies sit on a row below the IC but each net's wire
     needs to run at the IC pin's Y to clear the row."""
     bodies = list(bodies or [])
+    keepouts = list(keepouts or [])
     rail_y_hints = rail_y_hints or {}
     placed: list[tuple[str, Seg]] = []   # (net, segment) routed so far
     placed_corners: list[Pt] = []        # corners of prior nets
@@ -365,7 +378,7 @@ def route_nets(
         ]
         blocked = foreign_all + placed_corners
         segs, corners = _route_tree(
-            upts, name, placed, blocked, foreign_wired, bodies,
+            upts, name, placed, blocked, foreign_wired, bodies, keepouts,
             hint_y=rail_y_hints.get(name),
         )
         routed[name] = segs

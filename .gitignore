@@ -86,3 +86,6 @@ services/api/dist/
 services/api/*.spec
 services/api/.venv-build/
 apps/desktop/src-tauri/binaries/
+
+# Generated force-sim traces for the layout viewer (dev/layout-sim/index.html)
+dev/layout-sim/*.json

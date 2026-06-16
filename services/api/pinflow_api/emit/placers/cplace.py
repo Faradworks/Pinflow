@@ -1311,19 +1311,17 @@ def _apply_extras(cs: _CSet, extras_x: list, extras_y: list) -> None:
                 current.append(ec)
 
 
-def _build_once(netlist: Netlist, tree: LayoutTree, title: str,
-                wiring: str, extras_x: list | None = None,
-                extras_y: list | None = None,
-                external_emitter=None) -> PlacerResult:
-    sch = ksa.create_schematic(title)
-    issues: list[str] = []
-    plan = tree.plan
-    anchor = tree.anchor
+def _horiz_refs(tree: LayoutTree) -> frozenset[str]:
+    """Refdeses to rotate to horizontal in `_place_and_measure`: rail series
+    elements (on the rail trunk) and control resistors whose IC pin lives on a
+    vertical (L/R) edge of the IC body — those want to extend left/right of the
+    IC so the wire from the pin meets a horizontal pin of the R.
 
-    # Refdeses to be rotated to horizontal in _place_and_measure: rail series
-    # elements (on the rail trunk) and control resistors whose IC pin lives on
-    # a vertical (L/R) edge of the IC body — those want to extend left/right
-    # of the IC so the wire from the pin meets a horizontal pin of the R.
+    Shared with `emit.placers.fdplace`, which reuses `_orient_all` and so needs
+    the identical pre-rotation (`_orient_series` only 180°-flips an already-
+    horizontal part)."""
+    plan = tree.plan
+
     def _ctrl_resistor_is_horizontal(refdes: str) -> bool:
         pc = plan.parts.get(refdes)
         if pc is None or tree.anchor is None:
@@ -1339,19 +1337,31 @@ def _build_once(netlist: Netlist, tree: LayoutTree, title: str,
 
     # Exclude cap-islanded series elements: they go vertical at the page
     # edge (see `_emit_rail_bank_islanded`), not horizontal on the trunk.
-    _cap_island_active = any(
+    cap_island = any(
         g.archetype == Archetype.SIGNAL_STAIRCASE for g in tree.groups
     )
     horiz_series = {
         r for g in tree.groups if g.archetype == Archetype.SERIES_FILTER
         for r in g.members if plan.parts[r].role == Role.SERIES_ELEMENT
-        and not _cap_island_active
+        and not cap_island
     }
     horiz_ctrl = {
         r for g in tree.groups if g.archetype == Archetype.CONTROL_RESISTOR
         for r in g.members if _ctrl_resistor_is_horizontal(r)
     }
-    horiz = frozenset(horiz_series | horiz_ctrl)
+    return frozenset(horiz_series | horiz_ctrl)
+
+
+def _build_once(netlist: Netlist, tree: LayoutTree, title: str,
+                wiring: str, extras_x: list | None = None,
+                extras_y: list | None = None,
+                external_emitter=None) -> PlacerResult:
+    sch = ksa.create_schematic(title)
+    issues: list[str] = []
+    plan = tree.plan
+    anchor = tree.anchor
+
+    horiz = _horiz_refs(tree)
     ordered = sorted(netlist.parts, key=lambda p: _natural_key(p.refdes))
     cells = _place_and_measure(sch, ordered, issues, rotate_horizontal=horiz)
     by_ref = {c.refdes: c for c in cells}

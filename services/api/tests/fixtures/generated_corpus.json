@@ -1,0 +1,37 @@
+{
+  "_comment": [
+    "Prompt-derived netlist corpus — the realistic stressors for the placer.",
+    "Unlike golden_corpus.json, these entries have NO hand-drawn .kicad_sch",
+    "ceiling: a Netlist is the source of truth and is committed (it cannot be",
+    "regenerated deterministically — see tests/fixtures/README.md).",
+    "",
+    "Entry shape: name, netlist (path under tests/fixtures), source",
+    "('hand-authored' | 'captured'), optional symbols (sidecar .kicad_sym dir",
+    "for non-bundled lib_ids), optional score_floor (rubric.total regression",
+    "guard, measured-at-landing minus ~0.02 jitter), note.",
+    "Add captured entries with scripts/capture_netlist.py."
+  ],
+  "entries": [
+    {
+      "name": "buck_tps62840",
+      "netlist": "generated/buck_tps62840.netlist.json",
+      "source": "hand-authored",
+      "score_floor": 0.95,
+      "note": "1-IC buck (TPS628436DRL, bundled sister of TPS62840). Agent-shaped rails: is_port on VIN/VOUT/GND, FB divider, EN pull-up. Exercises the single-IC pin-anchored path."
+    },
+    {
+      "name": "mcu_rp2040",
+      "netlist": "generated/mcu_rp2040.netlist.json",
+      "source": "hand-authored",
+      "score_floor": 0.93,
+      "note": "Dense 56-pin MCU decoupling: 8 same-role 100nF caps + bulk on one +3V3 net, RUN pull-up. Stresses same-role cohort placement and long supply fan-out."
+    },
+    {
+      "name": "ldo_ap2112k",
+      "netlist": "generated/ldo_ap2112k.netlist.json",
+      "source": "captured",
+      "score_floor": 0.98,
+      "note": "Real agent output (parse_datasheet -> design_spec -> netlist_synth), captured 2026-06-16. AP2112K LDO, in+out cap. Resolves to the bundled AP2112K-1.2 symbol; exercises a no-connect marker (pin 4) and an exposed EN port the hand-authored fixtures don't."
+    }
+  ]
+}

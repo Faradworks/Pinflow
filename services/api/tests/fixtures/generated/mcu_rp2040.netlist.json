@@ -1,0 +1,69 @@
+{
+  "parts": [
+    {
+      "refdes": "U1",
+      "lib_id": "MCU_RaspberryPi:RP2040",
+      "value": "RP2040",
+      "footprint": "Package_DFN_QFN:QFN-56-1EP_7x7mm_P0.4mm_EP3.2x3.2mm"
+    },
+    {"refdes": "C1", "lib_id": "Device:C", "value": "100nF", "footprint": "Capacitor_SMD:C_0402_1005Metric"},
+    {"refdes": "C2", "lib_id": "Device:C", "value": "100nF", "footprint": "Capacitor_SMD:C_0402_1005Metric"},
+    {"refdes": "C3", "lib_id": "Device:C", "value": "100nF", "footprint": "Capacitor_SMD:C_0402_1005Metric"},
+    {"refdes": "C4", "lib_id": "Device:C", "value": "100nF", "footprint": "Capacitor_SMD:C_0402_1005Metric"},
+    {"refdes": "C5", "lib_id": "Device:C", "value": "100nF", "footprint": "Capacitor_SMD:C_0402_1005Metric"},
+    {"refdes": "C6", "lib_id": "Device:C", "value": "100nF", "footprint": "Capacitor_SMD:C_0402_1005Metric"},
+    {"refdes": "C7", "lib_id": "Device:C", "value": "100nF", "footprint": "Capacitor_SMD:C_0402_1005Metric"},
+    {"refdes": "C8", "lib_id": "Device:C", "value": "100nF", "footprint": "Capacitor_SMD:C_0402_1005Metric"},
+    {"refdes": "C9", "lib_id": "Device:C", "value": "10uF", "footprint": "Capacitor_SMD:C_0805_2012Metric"},
+    {"refdes": "R1", "lib_id": "Device:R", "value": "10k", "footprint": "Resistor_SMD:R_0402_1005Metric"}
+  ],
+  "nets": [
+    {
+      "name": "+3V3",
+      "is_port": true,
+      "endpoints": [
+        {"ref": "U1", "pin": "1"},
+        {"ref": "U1", "pin": "10"},
+        {"ref": "U1", "pin": "22"},
+        {"ref": "U1", "pin": "33"},
+        {"ref": "U1", "pin": "42"},
+        {"ref": "U1", "pin": "49"},
+        {"ref": "U1", "pin": "23"},
+        {"ref": "U1", "pin": "50"},
+        {"ref": "C1", "pin": "1"},
+        {"ref": "C2", "pin": "1"},
+        {"ref": "C3", "pin": "1"},
+        {"ref": "C4", "pin": "1"},
+        {"ref": "C5", "pin": "1"},
+        {"ref": "C6", "pin": "1"},
+        {"ref": "C7", "pin": "1"},
+        {"ref": "C8", "pin": "1"},
+        {"ref": "C9", "pin": "1"},
+        {"ref": "R1", "pin": "1"}
+      ]
+    },
+    {
+      "name": "GND",
+      "is_port": true,
+      "endpoints": [
+        {"ref": "U1", "pin": "57"},
+        {"ref": "C1", "pin": "2"},
+        {"ref": "C2", "pin": "2"},
+        {"ref": "C3", "pin": "2"},
+        {"ref": "C4", "pin": "2"},
+        {"ref": "C5", "pin": "2"},
+        {"ref": "C6", "pin": "2"},
+        {"ref": "C7", "pin": "2"},
+        {"ref": "C8", "pin": "2"},
+        {"ref": "C9", "pin": "2"}
+      ]
+    },
+    {
+      "name": "RUN",
+      "endpoints": [
+        {"ref": "U1", "pin": "26"},
+        {"ref": "R1", "pin": "2"}
+      ]
+    }
+  ]
+}

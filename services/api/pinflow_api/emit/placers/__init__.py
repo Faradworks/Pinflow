@@ -65,6 +65,11 @@ def _load_greedy() -> PlacerFn:
     return greedy
 
 
+def _load_fdplace() -> PlacerFn:
+    from pinflow_api.emit.placers.fdplace import fdplace
+    return fdplace
+
+
 def _is_dense_ic_pattern(tree) -> bool:
     """Detect the failure mode where cplace's archetype coordination breaks
     down: a SIGNAL_STAIRCASE *and* a DIVIDER_STACK on the same IC side. On
@@ -122,6 +127,7 @@ def _load_auto() -> PlacerFn:
 _REGISTRY: dict[str, Callable[[], PlacerFn]] = {
     "auto": _load_auto,
     "cplace": _load_cplace,
+    "fdplace": _load_fdplace,
     "greedy": _load_greedy,
     "legacy": _load_legacy,
     "llm_placer": _load_llm,

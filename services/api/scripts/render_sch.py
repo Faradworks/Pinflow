@@ -71,6 +71,8 @@ def main() -> None:
     ap.add_argument("--dpi", type=int, default=300)
     ap.add_argument("--theme", help="kicad-cli color theme")
     ap.add_argument("--bw", action="store_true", help="black and white")
+    ap.add_argument("--white", action="store_true",
+                    help="white background instead of KiCad's cream theme fill")
     ap.add_argument("--frame", action="store_true",
                     help="keep the drawing sheet/title block (off by default)")
     ap.add_argument("--no-crop", action="store_true",
@@ -110,6 +112,7 @@ def main() -> None:
             source, out,
             dpi=args.dpi, theme=args.theme, black_and_white=args.bw,
             exclude_drawing_sheet=not args.frame,
+            white_background=args.white,
             crop=not args.no_crop, margin_mm=args.margin,
         )
     except RenderError as e:

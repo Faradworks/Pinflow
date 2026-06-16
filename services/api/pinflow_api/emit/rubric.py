@@ -531,46 +531,54 @@ def _metric_wire_crossings(segs: list[Seg]) -> MetricResult:
     )
 
 
-def _seg_through_box(seg: Seg, box: BBox) -> bool:
-    """True if any *interior* point of the segment falls inside `box`. A
-    wire terminating at the box edge (e.g. at a pin) does not count — only
-    a strict interior crossing. Works for both orthogonal and diagonal
-    segments via a parametric inside-test."""
+def _seg_interior_run(seg: Seg, box: BBox) -> tuple[float, float]:
+    """For an orthogonal segment, return `(run, span)`: the length the segment
+    overlaps `box`'s interior along its own axis, and the box's extent on that
+    axis. `(0, 0)` if the segment runs outside the interior or is diagonal.
+
+    This is the traversal length, not a point sample: a short pin stub or a
+    same-side pin bridge yields a tiny run hugging one edge; a wire that cuts
+    clear across the body yields a run approaching the full span. The ratio
+    `run / span` is therefore scale-invariant — it reads the same on a 5 mm
+    cap as on a 45 mm IC, and doesn't care that `get_component_bounding_box`
+    pads the box wider than the pins (legit pin wires give a short run)."""
     (x0, y0), (x1, y1) = seg
     bx0, by0, bx1, by1 = box
     if bx1 - bx0 < _EPS or by1 - by0 < _EPS:
-        return False
-    # Sample three interior points (¼, ½, ¾ along the segment); if any is
-    # inside the box, the segment cuts through.
-    for t in (0.25, 0.5, 0.75):
-        x = x0 + (x1 - x0) * t
-        y = y0 + (y1 - y0) * t
-        if bx0 + _EPS < x < bx1 - _EPS and by0 + _EPS < y < by1 - _EPS:
-            return True
-    return False
+        return (0.0, 0.0)
+    if abs(y0 - y1) < _EPS:                       # horizontal
+        if not (by0 + _EPS < y0 < by1 - _EPS):
+            return (0.0, 0.0)
+        lo, hi = sorted((x0, x1))
+        return (max(0.0, min(hi, bx1) - max(lo, bx0)), bx1 - bx0)
+    if abs(x0 - x1) < _EPS:                        # vertical
+        if not (bx0 + _EPS < x0 < bx1 - _EPS):
+            return (0.0, 0.0)
+        lo, hi = sorted((y0, y1))
+        return (max(0.0, min(hi, by1) - max(lo, by0)), by1 - by0)
+    return (0.0, 0.0)                              # diagonal — not our concern
 
 
-def _ep_inside(ep: Pt, box: BBox, slop: float = _EPS) -> bool:
-    """True if endpoint `ep` is inside box `box` (incl. on the boundary
-    within `slop`) — i.e. the wire is plausibly connecting to a pin that
-    lives inside the body's bbox margin, not cutting through it. The default
-    slop is `_EPS`: an endpoint exactly on the boundary still counts as
-    'connected' because pin tips often sit on a bbox edge."""
-    bx0, by0, bx1, by1 = box
-    return (bx0 - slop < ep[0] < bx1 + slop
-            and by0 - slop < ep[1] < by1 + slop)
+# A wire counts as cutting *through* a body when its interior run exceeds this
+# fraction of the body's span on that axis — i.e. it traverses more than half
+# the part. Below it, the segment is a pin stub or same-side bridge near one
+# edge (the legit case), not a crossing.
+_THROUGH_FRAC = 0.5
 
 
 def _metric_wire_through_part(
     segs: list[Seg], body_boxes: dict[str, BBox]
 ) -> MetricResult:
-    """Wire segments cutting *through* a part body — both endpoints outside
-    the body bbox, with interior crossing the body interior. The visual
-    smell of a placer that didn't know there was a component in the way.
-    A wire endpoint inside the bbox is a legitimate pin connection (pins
-    sit inside the bbox because the box covers pin stubs); we exempt those.
-    The body interior for the crossing test is shrunk slightly so a wire
-    grazing the body's outer edge doesn't false-positive."""
+    """Wire segments cutting *through* a part body — the visual smell of a
+    placer (or router) that didn't know there was a component in the way.
+
+    A segment is a violation against a body when its run through the body's
+    (slightly shrunk) interior exceeds half the body's span on that axis
+    (`_seg_interior_run`). That traversal test replaces the old
+    endpoint-in-bbox exemption, which silently hid every through-IC wire: an
+    IC bbox is padded wider than its pins, so a wire diving clear across the
+    chip still ends 'inside' the box and looked like a pin connection. Run
+    length doesn't have that blind spot — legit pin wires hug one edge."""
     if not body_boxes:
         return MetricResult("wire_through_part", 0.0, 1.0,
                             _WEIGHTS["wire_through_part"], "no bodies")
@@ -578,12 +586,9 @@ def _metric_wire_through_part(
                  for ref, b in body_boxes.items()}
     violations = 0
     for seg in segs:
-        for ref, body in body_boxes.items():
-            # Either endpoint inside body's bbox: legitimate pin connection
-            # against this body. Skip — no violation against *this* body.
-            if _ep_inside(seg[0], body) or _ep_inside(seg[1], body):
-                continue
-            if _seg_through_box(seg, interiors[ref]):
+        for ref in interiors:
+            run, span = _seg_interior_run(seg, interiors[ref])
+            if span > _EPS and run > _THROUGH_FRAC * span:
                 violations += 1
                 break  # one violation per segment
     return MetricResult(

@@ -32,6 +32,7 @@ from collections import Counter
 from dataclasses import dataclass, field
 
 import kicad_sch_api as ksa
+from kicad_sch_api.core.component_bounds import get_component_bounding_box
 
 from pinflow_api.builders._common import sch_to_string
 from pinflow_api.emit import bbox
@@ -1122,18 +1123,41 @@ def _gnd_pin_clusters(pins: list) -> list[list]:
     return clusters
 
 
+def _ic_keepouts(
+    sch: ksa.Schematic, ic_refs: list[str],
+) -> list[tuple[float, float, float, float]]:
+    """Body rects (symbol+pins) of the IC anchors, for the router to route
+    around. Pin connections terminate on the box edge, not its interior, so
+    feeding the full box never blocks a legitimate pin wire — only segments
+    that traverse the chip register against it (see `route._seg_hits_rect`)."""
+    rects: list[tuple[float, float, float, float]] = []
+    for ref in ic_refs:
+        comp = sch.components.get(ref)
+        if comp is None:
+            continue
+        try:
+            bb = get_component_bounding_box(comp, include_properties=False)
+        except Exception:  # noqa: BLE001 — a missing symbol just skips keep-out
+            continue
+        rects.append((bb.min_x, bb.min_y, bb.max_x, bb.max_y))
+    return rects
+
+
 def _wire_router(
     sch: ksa.Schematic, wired: list, all_pins: list[tuple[float, float]],
     issues: list[str], rail_y_hints: dict[str, float] | None = None,
+    keepouts: list[tuple[float, float, float, float]] | None = None,
 ) -> None:
     """Wire the IC-touching nets with the crossing-minimising router. `wired`
     is a list of `(net, pts)` where `pts` are `(ref, pin, xy, comp)` records.
 
     `rail_y_hints` is passed through to `route_nets`; see there for the
-    staircase-trunk-Y use case."""
+    staircase-trunk-Y use case. `keepouts` are hard no-go rects (the IC body)
+    the router must route around — without them the router is blind to the
+    chip and drives wires straight through it."""
     routed = route_nets(
         [(net.name, [p[2] for p in pts]) for net, pts in wired], all_pins,
-        rail_y_hints=rail_y_hints,
+        rail_y_hints=rail_y_hints, keepouts=keepouts,
     )
     for rn in routed:
         for a, b in rn.segments:
@@ -1387,7 +1411,8 @@ def _place_connectivity(
         _wire_star(sch, wired, plan, issues)
     elif wiring == "router":
         _wire_router(sch, wired, all_pins, issues,
-                     rail_y_hints=rail_y_hints)
+                     rail_y_hints=rail_y_hints,
+                     keepouts=_ic_keepouts(sch, plan.ics))
     # wiring == "labels": no wires emitted — connectivity is label-borne.
 
     for net in netlist.nets:

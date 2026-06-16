@@ -55,7 +55,7 @@ def _to_sch_file(source: str | Path, tmpd: Path) -> Path:
 
 def _export_pdf(sch: Path, tmpd: Path, *, theme: str | None,
                 black_and_white: bool, exclude_drawing_sheet: bool,
-                pages: str | None) -> Path:
+                white_background: bool, pages: str | None) -> Path:
     if not _KCLI.is_file():
         raise RenderError(f"kicad-cli not found at {_KCLI}")
     pdf = tmpd / "render.pdf"
@@ -64,6 +64,10 @@ def _export_pdf(sch: Path, tmpd: Path, *, theme: str | None,
         cmd.append("-e")  # tighter content, less A4 whitespace in the raster
     if black_and_white:
         cmd.append("-b")
+    if white_background:
+        # Drop KiCad's cream theme fill; pdftoppm then rasters the empty
+        # background as white.
+        cmd.append("-n")
     if theme:
         cmd += ["-t", theme]
     if pages:
@@ -170,6 +174,7 @@ def render_schematic(
     theme: str | None = None,
     black_and_white: bool = False,
     exclude_drawing_sheet: bool = True,
+    white_background: bool = False,
     crop: bool = True,
     margin_mm: float = 4.0,
     pages: str | None = None,
@@ -189,7 +194,8 @@ def render_schematic(
         sch = _to_sch_file(source, tmpd)
         pdf = _export_pdf(
             sch, tmpd, theme=theme, black_and_white=black_and_white,
-            exclude_drawing_sheet=exclude_drawing_sheet, pages=pages,
+            exclude_drawing_sheet=exclude_drawing_sheet,
+            white_background=white_background, pages=pages,
         )
         crop_px = _crop_px(sch, dpi, margin_mm) if crop else None
         _pdf_to_png(pdf, out, dpi=dpi, crop_px=crop_px)

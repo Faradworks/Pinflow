@@ -1,0 +1,99 @@
+{
+  "parts": [
+    {
+      "refdes": "U1",
+      "lib_id": "Regulator_Switching:TPS628436DRL",
+      "value": "TPS628436DRL",
+      "footprint": "Package_SON:Texas_DRL-6_1.6x1.6mm_P0.5mm"
+    },
+    {
+      "refdes": "C1",
+      "lib_id": "Device:C",
+      "value": "10uF",
+      "footprint": "Capacitor_SMD:C_0603_1608Metric"
+    },
+    {
+      "refdes": "C2",
+      "lib_id": "Device:C",
+      "value": "22uF",
+      "footprint": "Capacitor_SMD:C_0805_2012Metric"
+    },
+    {
+      "refdes": "L1",
+      "lib_id": "Device:L",
+      "value": "2.2uH",
+      "footprint": "Inductor_SMD:L_0805_2012Metric"
+    },
+    {
+      "refdes": "R1",
+      "lib_id": "Device:R",
+      "value": "100k",
+      "footprint": "Resistor_SMD:R_0402_1005Metric"
+    },
+    {
+      "refdes": "R2",
+      "lib_id": "Device:R",
+      "value": "100k",
+      "footprint": "Resistor_SMD:R_0402_1005Metric"
+    },
+    {
+      "refdes": "R3",
+      "lib_id": "Device:R",
+      "value": "100k",
+      "footprint": "Resistor_SMD:R_0402_1005Metric"
+    }
+  ],
+  "nets": [
+    {
+      "name": "VIN",
+      "is_port": true,
+      "endpoints": [
+        {"ref": "U1", "pin": "2"},
+        {"ref": "C1", "pin": "1"},
+        {"ref": "R3", "pin": "1"}
+      ]
+    },
+    {
+      "name": "VOUT",
+      "is_port": true,
+      "endpoints": [
+        {"ref": "U1", "pin": "6"},
+        {"ref": "L1", "pin": "2"},
+        {"ref": "C2", "pin": "1"},
+        {"ref": "R1", "pin": "1"}
+      ]
+    },
+    {
+      "name": "GND",
+      "is_port": true,
+      "endpoints": [
+        {"ref": "U1", "pin": "1"},
+        {"ref": "C1", "pin": "2"},
+        {"ref": "C2", "pin": "2"},
+        {"ref": "R2", "pin": "2"}
+      ]
+    },
+    {
+      "name": "SW",
+      "endpoints": [
+        {"ref": "U1", "pin": "5"},
+        {"ref": "L1", "pin": "1"}
+      ]
+    },
+    {
+      "name": "FB",
+      "endpoints": [
+        {"ref": "U1", "pin": "3"},
+        {"ref": "R1", "pin": "2"},
+        {"ref": "R2", "pin": "1"}
+      ]
+    },
+    {
+      "name": "EN",
+      "endpoints": [
+        {"ref": "U1", "pin": "4"},
+        {"ref": "R3", "pin": "2"}
+      ]
+    }
+  ]
+}

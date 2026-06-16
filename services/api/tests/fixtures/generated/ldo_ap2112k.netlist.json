@@ -1,0 +1,102 @@
+{
+  "parts": [
+    {
+      "refdes": "U1",
+      "lib_id": "Regulator_Linear:AP2112K-1.2",
+      "value": "AP2112K-1.2TRG1",
+      "footprint": "",
+      "mpn": "AP2112K-1.2TRG1",
+      "search_query": null,
+      "min_voltage": null,
+      "no_connect_pins": [
+        "4"
+      ]
+    },
+    {
+      "refdes": "C1",
+      "lib_id": "Device:C",
+      "value": "1\u00b5F",
+      "footprint": "",
+      "mpn": null,
+      "search_query": "1\u00b5F 8V capacitor",
+      "min_voltage": 5.0,
+      "no_connect_pins": []
+    },
+    {
+      "refdes": "C2",
+      "lib_id": "Device:C",
+      "value": "1\u00b5F",
+      "footprint": "",
+      "mpn": null,
+      "search_query": "1\u00b5F 8V capacitor",
+      "min_voltage": 5.0,
+      "no_connect_pins": []
+    }
+  ],
+  "nets": [
+    {
+      "name": "VIN",
+      "is_power": true,
+      "voltage": 5.0,
+      "endpoints": [
+        {
+          "ref": "U1",
+          "pin": "1"
+        },
+        {
+          "ref": "C1",
+          "pin": "1"
+        }
+      ],
+      "is_port": true
+    },
+    {
+      "name": "VOUT",
+      "is_power": true,
+      "voltage": 1.2,
+      "endpoints": [
+        {
+          "ref": "U1",
+          "pin": "5"
+        },
+        {
+          "ref": "C2",
+          "pin": "1"
+        }
+      ],
+      "is_port": true
+    },
+    {
+      "name": "GND",
+      "is_power": true,
+      "voltage": 0.0,
+      "endpoints": [
+        {
+          "ref": "U1",
+          "pin": "2"
+        },
+        {
+          "ref": "C1",
+          "pin": "2"
+        },
+        {
+          "ref": "C2",
+          "pin": "2"
+        }
+      ],
+      "is_port": true
+    },
+    {
+      "name": "EN",
+      "is_power": false,
+      "voltage": null,
+      "endpoints": [
+        {
+          "ref": "U1",
+          "pin": "3"
+        }
+      ],
+      "is_port": false
+    }
+  ]
+}

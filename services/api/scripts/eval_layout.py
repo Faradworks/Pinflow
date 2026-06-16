@@ -7,20 +7,27 @@ golden_corpus.json`) and reports, per golden, the gap between the hand-drawn
 schematic and what `place()` regenerates from the same netlist.
 
     cd services/api
-    .venv/bin/python scripts/eval_layout.py                # whole corpus
+    .venv/bin/python scripts/eval_layout.py                # whole golden corpus
     .venv/bin/python scripts/eval_layout.py --only tps63020 --render
     .venv/bin/python scripts/eval_layout.py --json > report.json
+    .venv/bin/python scripts/eval_layout.py \
+        --manifest tests/fixtures/generated_corpus.json --render  # prompt-derived corpus
 
 For each golden it discovers the entry's symbol libraries, scores the golden
 `.kicad_sch`, regenerates from the golden's extracted netlist, scores that,
 and prints a side-by-side rubric comparison — the golden is the ceiling, the
-delta is the work left to do. `--placer {auto,cplace,greedy,legacy}` picks
-the engine. Default `cplace`. `auto` is the production gate (cplace for
-well-coordinated topologies; falls to greedy on dense ICs where cplace's
-independent archetype emitters produce inter-archetype body overlaps).
-`greedy` is /examples' BFS placer as a subprocess — visually best on dense
-ICs but gate-fails on sparse-IC topologies (e.g. mt3608). `legacy` is the
-older column placer kept as a regression reference.
+delta is the work left to do. `--placer` picks the engine (any name in the
+`emit.placers` registry — `auto`, `cplace`, `greedy`, `legacy`, `llm_placer`,
+plus whatever you register); default `cplace`. `auto` is the production gate
+(cplace for well-coordinated topologies; falls to greedy on dense ICs where
+cplace's independent archetype emitters produce inter-archetype body
+overlaps). `greedy` is /examples' BFS placer as a subprocess — visually best
+on dense ICs but gate-fails on sparse-IC topologies (e.g. mt3608). `legacy`
+is the older column placer kept as a regression reference.
+
+`--manifest` selects the corpus (default `golden_corpus.json`). The
+prompt-derived `generated_corpus.json` has netlist-only entries (no hand-drawn
+`sch` ceiling): those score the regeneration alone, no golden column.
 
 Ad-hoc modes (no corpus):
 
@@ -44,13 +51,14 @@ sys.path.insert(0, str(API_DIR))
 import kicad_sch_api as ksa  # noqa: E402
 
 from pinflow_api.emit.netlist import Netlist  # noqa: E402
-from pinflow_api.emit.placers import get_placer  # noqa: E402
+from pinflow_api.emit.placers import get_placer, list_placers  # noqa: E402
 from pinflow_api.emit.netlist_to_sch import PlacerError  # noqa: E402
 from pinflow_api.emit.rubric import RubricScore, score  # noqa: E402
 
 FIXTURES = API_DIR / "tests" / "fixtures"
 MANIFEST = FIXTURES / "golden_corpus.json"
 RENDERS = API_DIR / "_renders"
+_WHITE_BG = False  # set from --white in main(); read by _render
 
 
 # --- formatting --------------------------------------------------------------
@@ -141,7 +149,9 @@ def _load_netlist(path: Path) -> Netlist:
     return Netlist.model_validate(json.loads(path.read_text()))
 
 
-_PLACER_NAMES = ("auto", "cplace", "greedy", "legacy")
+# Every registered placer is selectable — adding an experimental engine to the
+# `emit.placers` registry makes it runnable here with no edit to this script.
+_PLACER_NAMES = tuple(list_placers())
 
 
 def _regenerate(netlist: Netlist, title: str, placer,
@@ -174,43 +184,58 @@ def _render(text: str, name: str) -> None:
     """Best-effort PNG render into `_renders/` — never fatal to the eval."""
     try:
         from pinflow_api.emit.render import render_schematic
-        out = render_schematic(text, RENDERS / f"{name}.png", dpi=200)
+        out = render_schematic(text, RENDERS / f"{name}.png", dpi=200,
+                               white_background=_WHITE_BG)
         print(f"  rendered → {out}", file=sys.stderr)
     except Exception as e:  # noqa: BLE001
         print(f"  warn: render {name} failed: {e}", file=sys.stderr)
 
 
-def _run_golden(entry: dict, do_render: bool, verbose: bool,
-                placer, placer_name: str) -> dict:
-    """Score one corpus entry: golden vs a placer's regeneration."""
+def _run_entry(entry: dict, do_render: bool, verbose: bool,
+               placer, placer_name: str) -> dict:
+    """Score one corpus entry with a placer's regeneration.
+
+    Two manifest shapes are supported. Golden entries carry a hand-drawn
+    `sch` — the ceiling — and we print the golden-vs-regen delta. Netlist-only
+    entries (the prompt-derived `generated_corpus.json`) have no `sch`: there
+    is no ceiling, so we score only the regeneration. `score_floor`, when
+    present, rides through to the JSON report for the gate in check_all.py."""
     name = entry["name"]
     _discover(FIXTURES / entry["symbols"] if entry.get("symbols") else None)
 
     netlist = _load_netlist(FIXTURES / entry["netlist"])
-    golden_text = (FIXTURES / entry["sch"]).read_text()
-    golden = score(golden_text, netlist)
 
     sch_path = FIXTURES / entry["sch"] if entry.get("sch") else None
+    golden = score(sch_path.read_text(), netlist) if sch_path else None
+
     regen_text, regen_err = _regenerate(netlist, name, placer,
-                                          source_schematic=sch_path)
+                                         source_schematic=sch_path)
     regen = score(regen_text, netlist) if regen_text else None
 
     if verbose:
-        tag = "hand-drawn" if entry.get("hand_drawn") else "regression input"
-        _print_comparison(f"{name}  ({placer_name})",
-                          f"{tag}  ·  {entry.get('note', '')}",
-                          golden, regen, regen_err)
+        if golden is not None:
+            tag = "hand-drawn" if entry.get("hand_drawn") else "regression input"
+            _print_comparison(f"{name}  ({placer_name})",
+                              f"{tag}  ·  {entry.get('note', '')}",
+                              golden, regen, regen_err)
+        elif regen is not None:
+            _print_single(f"{name}  ({placer_name})  ·  {entry.get('note', '')}",
+                          regen)
+        else:
+            print(f"\n  ⚠ {name}: regeneration failed — {regen_err}")
 
     if do_render:
-        _render(golden_text, f"{name}.golden")
+        if sch_path is not None:
+            _render(sch_path.read_text(), f"{name}.golden")
         if regen_text:
             _render(regen_text, f"{name}.{placer_name}")
 
     return {
         "name": name,
-        "golden": golden.to_dict(),
+        "golden": golden.to_dict() if golden else None,
         "regen": regen.to_dict() if regen else None,
         "regen_error": regen_err,
+        "score_floor": entry.get("score_floor"),
     }
 
 
@@ -227,13 +252,22 @@ def main() -> int:
                          "against it, or alone to regenerate + score")
     ap.add_argument("--symbols", type=Path,
                     help="ad-hoc: sidecar symbols dir to discover")
+    ap.add_argument("--manifest", type=Path, default=MANIFEST,
+                    help="corpus manifest to score (default: golden_corpus.json). "
+                         "Point at generated_corpus.json for the prompt-derived "
+                         "netlist corpus.")
     ap.add_argument("--placer", choices=_PLACER_NAMES, default="cplace",
-                    help="placer to regenerate with (default: cplace)")
+                    help=f"placer to regenerate with (default: cplace; one of "
+                         f"{', '.join(_PLACER_NAMES)})")
     ap.add_argument("--render", action="store_true",
                     help="also write PNG renders into _renders/")
+    ap.add_argument("--white", action="store_true",
+                    help="render on a white background (not KiCad's cream fill)")
     ap.add_argument("--json", action="store_true",
                     help="emit the full report as JSON on stdout")
     args = ap.parse_args()
+    global _WHITE_BG
+    _WHITE_BG = args.white
 
     # --- ad-hoc modes --------------------------------------------------------
     if args.sch or (args.netlist and not args.only):
@@ -264,33 +298,41 @@ def main() -> int:
         return 0
 
     # --- corpus mode ---------------------------------------------------------
-    if not MANIFEST.is_file():
-        print(f"error: corpus manifest not found at {MANIFEST}", file=sys.stderr)
+    if not args.manifest.is_file():
+        print(f"error: corpus manifest not found at {args.manifest}",
+              file=sys.stderr)
         return 1
-    goldens = json.loads(MANIFEST.read_text()).get("goldens", [])
+    manifest = json.loads(args.manifest.read_text())
+    # golden_corpus.json keys the list under "goldens"; generated_corpus.json
+    # under "entries". Accept either so one loader serves both.
+    entries = manifest.get("entries") or manifest.get("goldens") or []
     if args.only:
-        goldens = [g for g in goldens if g.get("name") == args.only]
-        if not goldens:
+        entries = [e for e in entries if e.get("name") == args.only]
+        if not entries:
             print(f"error: no corpus entry named {args.only!r}", file=sys.stderr)
             return 1
 
     placer = get_placer(args.placer)
-    reports = [_run_golden(g, args.render, not args.json, placer, args.placer)
-               for g in goldens]
+    reports = [_run_entry(e, args.render, not args.json, placer, args.placer)
+               for e in entries]
 
     if args.json:
         print(json.dumps({"reports": reports}, indent=2))
     else:
         print(f"\n{'=' * 78}")
-        print(f" scored {len(reports)} golden(s); the Δscore column is the "
-              f"layout gap to close.")
+        print(f" scored {len(reports)} entr(y/ies) with {args.placer}.")
         for r in reports:
-            if r["regen"]:
+            if not r["regen"]:
+                print(f"   {r['name']:<16} regen FAILED — {r['regen_error']}")
+            elif r["golden"]:
                 g, rg = r["golden"]["total"], r["regen"]["total"]
                 print(f"   {r['name']:<16} golden {g:.3f}  →  regen {rg:.3f}"
                       f"  (gap {rg - g:+.3f})")
             else:
-                print(f"   {r['name']:<16} regen FAILED — {r['regen_error']}")
+                rg = r["regen"]["total"]
+                floor = r.get("score_floor")
+                tail = f"  (floor {floor})" if floor is not None else ""
+                print(f"   {r['name']:<16} regen {rg:.3f}{tail}")
     return 0
 
 

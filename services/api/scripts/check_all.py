@@ -30,6 +30,9 @@ SMOKE_SCRIPTS = [
     "scripts/test_cost_loop.py",
     "scripts/check_determinism.py",
     "scripts/test_route.py",
+    # Invariants + score floors for the prompt-derived netlist corpus
+    # (generated_corpus.json). Floors live in the manifest, not here.
+    "scripts/test_generated_corpus.py",
 ]
 
 # Measured on 2026-06-12 (branch fix/agent-loop-quality) minus 0.02 jitter.

@@ -31,7 +31,7 @@ sys.path.insert(0, str(API_DIR))
 import kicad_sch_api as ksa  # noqa: E402
 
 from pinflow_api.emit.netlist import Netlist  # noqa: E402
-from pinflow_api.emit.placers.cplace import cplace  # noqa: E402
+from pinflow_api.emit.placers import get_placer  # noqa: E402
 
 FIXTURES = API_DIR / "tests" / "fixtures"
 MANIFEST = FIXTURES / "golden_corpus.json"
@@ -54,13 +54,14 @@ def _sig(sch_text: str) -> str:
 
 
 def _run_one(name: str, netlist: Netlist, syms_dir: Path | None,
-              runs: int) -> tuple[bool, int, str]:
+              runs: int, placer: str) -> tuple[bool, int, str]:
     if syms_dir is not None and syms_dir.is_dir():
         ksa.get_symbol_cache().discover_libraries([str(syms_dir.resolve())])
+    fn = get_placer(placer)
     hashes: set[str] = set()
     last = ""
     for _ in range(runs):
-        r = cplace(netlist, title=name)
+        r = fn(netlist, title=name)
         h = _sig(r.sch_text)
         hashes.add(h)
         last = h
@@ -73,6 +74,8 @@ def main() -> int:
                     help="check just this corpus entry")
     ap.add_argument("--runs", type=int, default=DEFAULT_RUNS,
                     help=f"runs per golden (default {DEFAULT_RUNS})")
+    ap.add_argument("--placer", default="cplace",
+                    help="placer engine to check (default cplace)")
     args = ap.parse_args()
 
     if not MANIFEST.is_file():
@@ -94,7 +97,7 @@ def main() -> int:
             (FIXTURES / entry["netlist"]).read_text()
         ))
         syms = FIXTURES / entry["symbols"] if entry.get("symbols") else None
-        ok, n_distinct, h = _run_one(name, netlist, syms, args.runs)
+        ok, n_distinct, h = _run_one(name, netlist, syms, args.runs, args.placer)
         mark = "✓" if ok else "✗"
         print(f"  {mark} {name:<12} {args.runs} runs → "
               f"{n_distinct} distinct  ({h})")

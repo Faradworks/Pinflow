@@ -1,0 +1,216 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Pinflow · force-directed layout viewer</title>
+<style>
+  :root { --bg:#11141a; --panel:#1a1f29; --ink:#e6e9ef; --mut:#8b93a3;
+          --line:#2a3140; --rail:#e0533d; --gnd:#7f8794; --sig:#4a9eff;
+          --ic:#d8b84a; --acc:#43d18b; }
+  * { box-sizing:border-box; }
+  html,body { margin:0; height:100%; background:var(--bg); color:var(--ink);
+              font:13px/1.4 ui-monospace,SFMono-Regular,Menlo,monospace; }
+  #app { display:flex; flex-direction:column; height:100%; }
+  #bar { display:flex; align-items:center; gap:10px; padding:8px 12px;
+         background:var(--panel); border-bottom:1px solid var(--line); flex-wrap:wrap; }
+  #bar button, #bar label.btn { background:#222936; color:var(--ink); border:1px solid var(--line);
+         border-radius:6px; padding:5px 10px; cursor:pointer; font:inherit; }
+  #bar button:hover, #bar label.btn:hover { border-color:var(--acc); }
+  #bar button:disabled { opacity:.4; cursor:default; }
+  #scrub { flex:1; min-width:160px; accent-color:var(--acc); }
+  .chk { display:flex; align-items:center; gap:4px; color:var(--mut); cursor:pointer; }
+  .sep { width:1px; align-self:stretch; background:var(--line); margin:0 2px; }
+  #hud { color:var(--mut); white-space:nowrap; }
+  #hud b { color:var(--ink); }
+  #hud .warn { color:var(--rail); }
+  #wrap { flex:1; position:relative; }
+  canvas { display:block; width:100%; height:100%; }
+  #drop { position:absolute; inset:0; display:flex; align-items:center; justify-content:center;
+          color:var(--mut); pointer-events:none; text-align:center; }
+  #drop.hide { display:none; }
+  .legend { position:absolute; right:12px; bottom:10px; color:var(--mut);
+            background:rgba(20,24,32,.8); border:1px solid var(--line); border-radius:6px; padding:6px 9px; }
+  .legend i { display:inline-block; width:11px; height:3px; vertical-align:middle; margin-right:5px; }
+  input[type=range].sp { width:90px; accent-color:var(--acc); }
+</style>
+</head>
+<body>
+<div id="app">
+  <div id="bar">
+    <label class="btn">Load JSON<input id="file" type="file" accept=".json" hidden></label>
+    <span class="sep"></span>
+    <button id="back" title="step back">⏮</button>
+    <button id="play">▶ play</button>
+    <button id="fwd" title="step forward">⏭</button>
+    <input id="scrub" type="range" min="0" max="0" value="0">
+    <span class="sep"></span>
+    <label class="chk">speed <input id="speed" class="sp" type="range" min="1" max="10" value="3"></label>
+    <label class="chk"><input id="gate" type="checkbox" checked> gate boxes</label>
+    <label class="chk"><input id="trunk" type="checkbox" checked> net trunks</label>
+    <button id="snap" title="show final post-snap layout">show snapped</button>
+    <span class="sep"></span>
+    <span id="hud">—</span>
+  </div>
+  <div id="wrap">
+    <canvas id="cv"></canvas>
+    <div id="drop">drop a <b>graph.json</b> here (or use “Load JSON”)<br>
+      <span style="font-size:11px">generate with: <code>scripts/dump_layout_graph.py &lt;fixture&gt; --trace --out dev/layout-sim/graph.json</code></span></div>
+    <div class="legend">
+      <div><i style="background:var(--rail)"></i>rail&nbsp; <i style="background:var(--gnd)"></i>gnd&nbsp; <i style="background:var(--sig)"></i>signal</div>
+    </div>
+  </div>
+</div>
+<script>
+const cv = document.getElementById('cv'), ctx = cv.getContext('2d');
+const $ = id => document.getElementById(id);
+let DATA=null, frame=0, playing=false, showSnap=false, fit=null, raf=0, acc=0;
+
+const COL = {rail:'#e0533d', power:'#e0533d', ground:'#7f8794', signal:'#4a9eff'};
+const STUB = 2.54;
+
+function rot(ox,oy,deg){ deg=((deg%360)+360)%360;
+  if(deg===90) return [-oy,ox]; if(deg===180) return [-ox,-oy];
+  if(deg===270) return [oy,-ox]; return [ox,oy]; }
+
+// position lookup returns [x, y, rot] arrays so pinWorld/facing index uniformly
+function pinWorld(node,pin,pos){ const [rx,ry]=rot(pin.ox,pin.oy,pos[2]); return [pos[0]+rx,pos[1]+ry]; }
+function facing(node,pin,pos){ return rot(pin.fx,pin.fy,pos[2]); }
+
+function framePositions(){
+  const m={};
+  if(showSnap){ for(const n of DATA.graph.nodes){ const s=DATA.snapped[n.ref]||[0,0]; m[n.ref]=[s[0],s[1],0]; } return m; }
+  for(const nd of DATA.frames[frame].nodes) m[nd.ref]=[nd.x,nd.y,nd.rot||0];
+  return m;
+}
+
+function computeFit(){
+  let minX=1e9,minY=1e9,maxX=-1e9,maxY=-1e9;
+  const consider=(x,y)=>{minX=Math.min(minX,x);minY=Math.min(minY,y);maxX=Math.max(maxX,x);maxY=Math.max(maxY,y);};
+  const byRef=Object.fromEntries(DATA.graph.nodes.map(n=>[n.ref,n]));
+  // union over all frames so the view never jumps during playback
+  for(const f of DATA.frames) for(const nd of f.nodes){
+    const n=byRef[nd.ref]; consider(nd.x-n.hx,nd.y-n.hy); consider(nd.x+n.hx,nd.y+n.hy);
+  }
+  for(const n of DATA.graph.nodes){ const s=DATA.snapped[n.ref]; if(s){ consider(s[0]-n.hx,s[1]-n.hy); consider(s[0]+n.hx,s[1]+n.hy);} }
+  return {minX,minY,maxX,maxY};
+}
+
+function tf(){
+  const pad=40, W=cv.width, H=cv.height;
+  const sx=(W-2*pad)/Math.max(1,fit.maxX-fit.minX), sy=(H-2*pad)/Math.max(1,fit.maxY-fit.minY);
+  const s=Math.min(sx,sy);
+  const ox=pad+((W-2*pad)-s*(fit.maxX-fit.minX))/2, oy=pad+((H-2*pad)-s*(fit.maxY-fit.minY))/2;
+  return (x,y)=>[ox+(x-fit.minX)*s, oy+(y-fit.minY)*s];
+}
+
+function draw(){
+  if(!DATA) return;
+  cv.width=cv.clientWidth; cv.height=cv.clientHeight;
+  ctx.clearRect(0,0,cv.width,cv.height);
+  const W=tf(), pos=framePositions(), byRef=Object.fromEntries(DATA.graph.nodes.map(n=>[n.ref,n]));
+
+  // grid
+  ctx.strokeStyle='#1c2230'; ctx.lineWidth=1;
+  const step=12.7;
+  for(let x=Math.ceil(fit.minX/step)*step; x<fit.maxX; x+=step){ const a=W(x,fit.minY),b=W(x,fit.maxY);
+    ctx.beginPath();ctx.moveTo(a[0],a[1]);ctx.lineTo(b[0],b[1]);ctx.stroke(); }
+  for(let y=Math.ceil(fit.minY/step)*step; y<fit.maxY; y+=step){ const a=W(fit.minX,y),b=W(fit.maxX,y);
+    ctx.beginPath();ctx.moveTo(a[0],a[1]);ctx.lineTo(b[0],b[1]);ctx.stroke(); }
+
+  // edges: orthogonal stub from each pin's facing, then L to the net centroid
+  for(const e of DATA.graph.edges){
+    const pts=[];
+    for(const ep of e.endpoints){ const n=byRef[ep.ref]; if(!n) continue;
+      const pin=n.pins.find(p=>p.num===ep.pin); if(!pin) continue;
+      pts.push([n,pin,pinWorld(n,pin,pos[ep.ref])]); }
+    if(pts.length<2) continue;
+    const cx=pts.reduce((a,p)=>a+p[2][0],0)/pts.length, cy=pts.reduce((a,p)=>a+p[2][1],0)/pts.length;
+    ctx.strokeStyle=COL[e.kind]||COL.signal; ctx.lineWidth=1.5; ctx.globalAlpha=.9;
+    for(const [n,pin,pw] of pts){
+      const f=facing(n,pin,pos[n.ref]);
+      const sx=pw[0]+f[0]*STUB, sy=pw[1]+f[1]*STUB;
+      const a=W(pw[0],pw[1]), b=W(sx,sy);
+      ctx.beginPath(); ctx.moveTo(a[0],a[1]); ctx.lineTo(b[0],b[1]);   // the stub
+      if($('trunk').checked){
+        const vert=Math.abs(f[1])>=Math.abs(f[0]);
+        const mid = vert ? W(sx,cy) : W(cx,sy);
+        const c=W(cx,cy);
+        ctx.lineTo(mid[0],mid[1]); ctx.lineTo(c[0],c[1]);             // L to centroid
+      }
+      ctx.stroke();
+    }
+    if($('trunk').checked){ const c=W(cx,cy); ctx.fillStyle=COL[e.kind]||COL.signal;
+      ctx.globalAlpha=.5; ctx.beginPath(); ctx.arc(c[0],c[1],2.5,0,7); ctx.fill(); }
+    ctx.globalAlpha=1;
+  }
+
+  // gate boxes (non-IC body bbox; red where two overlap within the 2.54 margin)
+  if($('gate').checked){
+    const m=DATA.config.margin||2.54, bodies=DATA.graph.nodes.filter(n=>!n.is_ic)
+      .map(n=>({n, x:pos[n.ref][0], y:pos[n.ref][1]}));
+    const bad=new Set();
+    for(let i=0;i<bodies.length;i++) for(let j=i+1;j<bodies.length;j++){
+      const a=bodies[i],b=bodies[j];
+      if((a.n.hx+b.n.hx+m)-Math.abs(a.x-b.x)>0 && (a.n.hy+b.n.hy+m)-Math.abs(a.y-b.y)>0){ bad.add(i);bad.add(j); } }
+    bodies.forEach((bd,i)=>{ const tl=W(bd.x-bd.n.hx,bd.y-bd.n.hy), br=W(bd.x+bd.n.hx,bd.y+bd.n.hy);
+      ctx.setLineDash([4,3]); ctx.lineWidth=1; ctx.strokeStyle=bad.has(i)?'#e0533d':'#36405288';
+      ctx.strokeRect(tl[0],tl[1],br[0]-tl[0],br[1]-tl[1]); ctx.setLineDash([]); });
+  }
+
+  // nodes
+  for(const n of DATA.graph.nodes){
+    const p=pos[n.ref]; const tl=W(p[0]-n.hx,p[1]-n.hy), br=W(p[0]+n.hx,p[1]+n.hy);
+    ctx.fillStyle = n.is_ic ? 'rgba(216,184,74,.16)' : 'rgba(200,210,225,.06)';
+    ctx.strokeStyle = n.is_ic ? '#d8b84a' : '#9aa6ba'; ctx.lineWidth=1.5;
+    ctx.fillRect(tl[0],tl[1],br[0]-tl[0],br[1]-tl[1]);
+    ctx.strokeRect(tl[0],tl[1],br[0]-tl[0],br[1]-tl[1]);
+    // pins
+    for(const pin of n.pins){ const pw=pinWorld(n,pin,p); const a=W(pw[0],pw[1]);
+      ctx.fillStyle='#cdd6e6'; ctx.beginPath(); ctx.arc(a[0],a[1],2,0,7); ctx.fill(); }
+    const c=W(p[0],p[1]);
+    ctx.fillStyle = n.is_ic ? '#f0d98a' : '#dce3ef';
+    ctx.font = (n.is_ic?'bold ':'')+'12px ui-monospace'; ctx.textAlign='center'; ctx.textBaseline='middle';
+    ctx.fillText(n.ref, c[0], c[1]);
+  }
+
+  // HUD
+  let overlaps=0;
+  { const m=DATA.config.margin||2.54, b=DATA.graph.nodes.filter(n=>!n.is_ic).map(n=>({n,x:pos[n.ref][0],y:pos[n.ref][1]}));
+    for(let i=0;i<b.length;i++)for(let j=i+1;j<b.length;j++)
+      if((b[i].n.hx+b[j].n.hx+m)-Math.abs(b[i].x-b[j].x)>0 && (b[i].n.hy+b[j].n.hy+m)-Math.abs(b[i].y-b[j].y)>0) overlaps++; }
+  const it = showSnap ? 'snapped' : (DATA.frames[frame]?.iter ?? frame);
+  $('hud').innerHTML = `<b>${DATA.name}</b> · ${DATA.graph.nodes.length} parts, ${DATA.graph.edges.length} nets `
+    + `· iter <b>${it}</b> · frame ${frame+1}/${DATA.frames.length} `
+    + `· margin overlaps: <span class="${overlaps?'warn':''}">${overlaps}</span>`;
+}
+
+function setData(d){
+  DATA=d; frame=0; showSnap=false; fit=computeFit();
+  $('scrub').max=d.frames.length-1; $('scrub').value=0; $('drop').classList.add('hide');
+  draw();
+}
+function step(n){ showSnap=false; frame=Math.max(0,Math.min(DATA.frames.length-1,frame+n)); $('scrub').value=frame; draw(); }
+function loop(t){ if(playing&&DATA&&!showSnap){ acc+= (+$('speed').value); if(acc>=4){ acc=0;
+    frame = frame+1>=DATA.frames.length ? 0 : frame+1; $('scrub').value=frame; draw(); } }
+  raf=requestAnimationFrame(loop); }
+
+// controls
+$('play').onclick=()=>{ playing=!playing; $('play').textContent=playing?'⏸ pause':'▶ play'; if(playing) showSnap=false; };
+$('back').onclick=()=>step(-1); $('fwd').onclick=()=>step(1);
+$('scrub').oninput=e=>{ showSnap=false; frame=+e.target.value; draw(); };
+$('gate').onchange=draw; $('trunk').onchange=draw;
+$('snap').onclick=()=>{ showSnap=!showSnap; $('snap').style.borderColor=showSnap?'#43d18b':''; draw(); };
+$('file').onchange=e=>{ const f=e.target.files[0]; if(!f) return;
+  f.text().then(t=>setData(JSON.parse(t))).catch(err=>alert('bad JSON: '+err)); };
+const wrap=$('wrap');
+wrap.ondragover=e=>{e.preventDefault();}; wrap.ondrop=e=>{e.preventDefault();
+  const f=e.dataTransfer.files[0]; if(f) f.text().then(t=>setData(JSON.parse(t))); };
+window.onresize=()=>DATA&&draw();
+raf=requestAnimationFrame(loop);
+
+// auto-load graph.json if served over http(s); file:// will fall back to the picker
+fetch('graph.json').then(r=>r.ok?r.json():Promise.reject()).then(setData).catch(()=>{});
+</script>
+</body>
+</html>

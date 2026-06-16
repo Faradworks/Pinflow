@@ -15,6 +15,7 @@ export function CreditsChip({ refreshKey }: { refreshKey: number }) {
   const [data, setData] = useState<CloudCredits | null>(null);
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   const [signingIn, setSigningIn] = useState(false);
   const pollRef = useRef<number | null>(null);
 
@@ -94,12 +95,31 @@ export function CreditsChip({ refreshKey }: { refreshKey: number }) {
 
   async function topUp(amount: number) {
     setBusy(true);
+    setError(null);
+    let res: Awaited<ReturnType<typeof api.cloudTopup>> | null = null;
     try {
-      await api.cloudTopup(amount);
+      res = await api.cloudTopup(amount);
     } catch {
-      /* ignore — surfaced as no balance change */
+      res = null; // network/transport failure
     }
     setBusy(false);
+
+    if (!res || !res.ok) {
+      // Keep the popover open so the message is visible; there's no checkout to wait on.
+      setError(topupError(res));
+      return;
+    }
+
+    // The local service tries to open the browser itself; if it couldn't (sandboxed
+    // sidecar, headless), open the Checkout URL from here as a fallback.
+    if (!res.opened && res.checkout_url) {
+      try {
+        window.open(res.checkout_url, "_blank");
+      } catch {
+        /* best effort */
+      }
+    }
+
     setOpen(false);
     // Checkout completes in the browser; poll for the credited balance.
     if (pollRef.current !== null) clearInterval(pollRef.current);
@@ -110,13 +130,18 @@ export function CreditsChip({ refreshKey }: { refreshKey: number }) {
     }, 3000);
   }
 
+  function toggleOpen() {
+    setError(null);
+    setOpen((o) => !o);
+  }
+
   const low = bal !== null && bal <= 1;
 
   return (
     <div style={{ position: "relative" }}>
       <button
         type="button"
-        onClick={() => setOpen((o) => !o)}
+        onClick={toggleOpen}
         title="Pinflow credits"
         style={{ ...chipStyle, borderColor: low ? "var(--pending)" : "var(--line)" }}
       >
@@ -140,9 +165,15 @@ export function CreditsChip({ refreshKey }: { refreshKey: number }) {
               </button>
             ))}
           </div>
-          <div style={{ fontSize: 11, color: "var(--muted)", marginTop: 8 }}>
-            Opens Stripe Checkout in your browser.
-          </div>
+          {error ? (
+            <div style={{ fontSize: 11, color: "var(--pending)", marginTop: 8, lineHeight: 1.4 }}>
+              {error}
+            </div>
+          ) : (
+            <div style={{ fontSize: 11, color: "var(--muted)", marginTop: 8 }}>
+              Opens Stripe Checkout in your browser.
+            </div>
+          )}
           <button type="button" onClick={signOut} style={signOutBtn}>
             Sign out
           </button>
@@ -150,6 +181,22 @@ export function CreditsChip({ refreshKey }: { refreshKey: number }) {
       )}
     </div>
   );
+}
+
+// Map a /cloud/topup failure to a short, user-facing line. Known reasons get a
+// friendly message; anything else falls back to the gateway's own detail/reason
+// so a misconfiguration (e.g. "top-up is not configured on this gateway") is
+// visible instead of a silently-dead button.
+function topupError(
+  res: { reason?: string; detail?: string } | null,
+): string {
+  const reason = res?.reason ?? "";
+  if (!res) return "Couldn't reach the local service. Is Pinflow running?";
+  if (reason === "not_signed_in") return "Your session expired — sign in again to top up.";
+  if (reason === "cloud_not_configured") return "Pinflow Cloud isn't configured.";
+  if (reason.startsWith("gateway 503") || (res.detail ?? "").includes("billing_unavailable"))
+    return "Top-up is temporarily unavailable on the server. Try again later.";
+  return res.detail || reason || "Couldn't start checkout — please try again.";
 }
 
 const chipStyle: CSSProperties = {

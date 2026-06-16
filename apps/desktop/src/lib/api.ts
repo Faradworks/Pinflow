@@ -272,7 +272,7 @@ export const api = {
 
   async cloudTopup(
     amountUsd: number,
-  ): Promise<{ ok: boolean; checkout_url?: string; opened?: boolean; reason?: string }> {
+  ): Promise<{ ok: boolean; checkout_url?: string; opened?: boolean; reason?: string; detail?: string }> {
     const r = await fetch(`${getApiBase()}/cloud/topup`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },

@@ -143,7 +143,7 @@ def test_estimate_followup_usd_scales_with_turns():
     assert cost.estimate_followup_usd("claude-opus-4-8", 30_000, turns=0) == 0.0
 
 
-def test_gate_estimate_cloud_credits_and_self_usd():
+def test_gate_estimate_cloud_credits_and_self_none():
     m = cost.CostMeter()
     m.record(charged=0.30, balance=9.70, usd=0.20)   # synthetic fixture ratio, balance 9.70
     msgs = [{"role": "user", "content": "x" * 8000}]
@@ -152,9 +152,9 @@ def test_gate_estimate_cloud_credits_and_self_usd():
     assert cloud["unit"] == "credits" and cloud["hi"] > cloud["lo"] > 0
     assert cloud["balance"] == 9.70
 
-    # Self/BYOK → USD, no balance, no credit margin applied.
+    # Self/BYOK → no forward estimate (a client-side USD figure would be misleading).
     selfp = cost.gate_estimate(m, "claude-opus-4-8", msgs, staged=True, provider="self")
-    assert selfp["unit"] == "usd" and selfp["balance"] is None
+    assert selfp is None
 
     # The post-stage commit gate (1 turn) is cheaper than the design gate (3 turns).
     cloud_commit = cost.gate_estimate(m, "claude-opus-4-8", msgs, staged=True, provider="pinflow-cloud")

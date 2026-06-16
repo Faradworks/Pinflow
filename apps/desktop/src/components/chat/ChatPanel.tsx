@@ -53,8 +53,8 @@ const SUGGESTIONS = [
 // Live running-spend line above the composer. Cloud accounts read authoritative
 // credits from the gateway (the remaining balance lives in the title-bar chip;
 // this is the in-flight spend for the current request, incl. tool calls). BYO-key
-// accounts have no credits — they pay Anthropic directly — so they get a `~` USD
-// estimate from public list prices instead.
+// accounts have no credits — they pay Anthropic directly — so they get the exact
+// token count only (no client-side $ estimate; see CostMeterLine).
 function fmtTokens(n: number): string {
   const v = Math.round(n);
   if (v >= 1e6) return `${(v / 1e6).toFixed(2)}M`;
@@ -69,16 +69,14 @@ function CostMeterLine({ cost, cloudMode }: { cost: CostInfo; cloudMode: boolean
   // of snapping. Hooks must run unconditionally → they precede the early return.
   const tokens = useEasedNumber(cost.requestTokens);
   const credits = useEasedNumber(cost.requestCredits);
-  const usd = useEasedNumber(cost.requestUsd);
   const sessionCredits = useEasedNumber(cost.conversationCredits);
-  if (cost.requestTokens <= 0 && cost.requestCredits <= 0 && cost.requestUsd <= 0) return null;
-  // Cloud → authoritative credits; BYOK → a ~USD estimate. Token count shown for
-  // both (BYOK users care about raw tokens; cloud users get credits + tokens).
-  // Decimal precision keys off the real target (not the eased value) so it doesn't
-  // flip mid-animation as the number crosses the $0.10 threshold.
-  const money = showCredits
-    ? `${credits.toFixed(2)} cr`
-    : `~$${usd.toFixed(cost.requestUsd < 0.1 ? 4 : 3)}`;
+  if (cost.requestTokens <= 0 && cost.requestCredits <= 0) return null;
+  // Cloud → authoritative credits + the exact token count. BYOK → token count
+  // ONLY: no per-request $ figure. A client-side USD estimate would need a
+  // hand-kept price table and structurally undercounts (it misses tokens a tool
+  // spends internally, e.g. the datasheet read), so a quietly-low number is worse
+  // than none — the exact token count is the honest figure BYOK users get.
+  const credPrefix = showCredits ? `${credits.toFixed(2)} cr · ` : "";
   const session =
     showCredits && cost.conversationCredits > cost.requestCredits + 1e-9
       ? ` · ${sessionCredits.toFixed(2)} cr session`
@@ -86,10 +84,10 @@ function CostMeterLine({ cost, cloudMode }: { cost: CostInfo; cloudMode: boolean
   return (
     <div
       style={meterStyle}
-      title={`${cost.requestInputTokens.toLocaleString()} in + ${cost.requestOutputTokens.toLocaleString()} out${showCredits ? " · from Pinflow Cloud" : " · USD estimated from token usage"}`}
+      title={`${cost.requestInputTokens.toLocaleString()} in + ${cost.requestOutputTokens.toLocaleString()} out${showCredits ? " · from Pinflow Cloud" : ""}`}
     >
       <span style={{ color: "var(--accent)" }}>⚡</span>
-      <span>{money} · {fmtTokens(tokens)} tok this request</span>
+      <span>{credPrefix}{fmtTokens(tokens)} tok this request</span>
       {session && <span style={{ color: "var(--muted)" }}>{session}</span>}
     </div>
   );

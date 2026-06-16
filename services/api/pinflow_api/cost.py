@@ -247,8 +247,9 @@ def gate_estimate(
     provider: str,
 ) -> Optional[dict]:
     """Fuzzy 'cost to finish from here' for a Confirm/Discard gate, as a range.
-    Credits on the cloud path (USD projection × the observed credit ratio), USD
-    on self/BYOK. None when there's nothing worth showing."""
+    Credits on the cloud path (USD projection × the observed credit ratio), and
+    nothing on self/BYOK — a client-side USD figure would be misleading there, so
+    the gate shows no forward estimate. None when there's nothing worth showing."""
     turns = _TURNS_COMMIT_GATE if staged else _TURNS_DESIGN_GATE
     usd = estimate_followup_usd(model, approx_context_tokens(messages), turns=turns)
     if usd <= 0:
@@ -261,7 +262,11 @@ def gate_estimate(
             "hi": round(credits * 1.5, 2),
             "balance": meter.last_balance,
         }
-    return {"unit": "usd", "lo": round(usd * 0.5, 4), "hi": round(usd * 1.5, 4), "balance": None}
+    # Self/BYOK: no authoritative cost source, and a client-side USD figure would
+    # be misleading (hand-kept price table; misses tool-internal tokens). Show no
+    # forward estimate rather than a quietly-wrong one — consistent with the
+    # per-request meter line, which is tokens-only for BYOK.
+    return None
 
 
 def _int(v: Any) -> int:

@@ -133,9 +133,10 @@ def test_cost_event_emitted_on_estimate_path():
     cost_events = [e for e in events if e.get("kind") == "cost"]
     assert len(cost_events) == 1, [e["kind"] for e in events]
     ce = cost_events[0]
-    # 1M input on Opus = $5.00 estimated; credits stay 0 (no gateway), estimated.
-    assert ce["request_usd"] == 5.0, ce
+    # No gateway → credits stay 0 and the scope is flagged estimated (BYOK); the
+    # exact token count is still reported (1M input).
     assert ce["request_credits"] == 0.0 and ce["estimated"] is True, ce
+    assert ce["request_tokens"] == 1_000_000, ce
     assert any(e.get("kind") == "done" for e in events)
 
 

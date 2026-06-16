@@ -101,16 +101,17 @@ def test_meter_balance_delta_cloud():
     assert _approx(m.conversation_credits, 2.1)  # 20.0 - 17.9
 
 
-def test_meter_self_path_usd_estimate():
+def test_meter_self_path_no_credits_flips_estimated():
     m = cost.CostMeter()
-    # No gateway balance → USD estimate accrues, credits stay 0, estimated flips.
+    # No gateway balance → no credits; the scope is flagged estimated (BYOK/self),
+    # which is what flips the UI to a tokens-only readout. No USD is surfaced.
     m.record(charged=None, balance=None, usd=0.45)
     m.record(charged=None, balance=None, usd=0.30)
     assert m.request_credits == 0.0 and m.conversation_credits == 0.0
-    assert _approx(m.request_usd, 0.75) and m.request_estimated is True
+    assert m.request_estimated is True
     m.reset_request()
-    assert m.request_usd == 0.0 and m.request_estimated is False
-    assert _approx(m.conversation_usd, 0.75)  # conversation total survives reset
+    assert m.request_estimated is False
+    assert m.conversation_estimated is True  # conversation flag survives reset
 
 
 def test_token_tracking():

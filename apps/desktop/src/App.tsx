@@ -166,7 +166,6 @@ function App() {
     if (e.kind === "cost") {
       setCost({
         requestCredits: e.request_credits ?? 0,
-        requestUsd: e.request_usd ?? 0,
         conversationCredits: e.conversation_credits ?? 0,
         estimated: !!e.estimated,
         balance: typeof e.balance === "number" ? e.balance : null,
@@ -303,7 +302,7 @@ function App() {
     // so the line shows this request from 0 (keeping the session total). Resume
     // paths (above, and onAnswer) deliberately don't reset — the request continues.
     setCost((c) =>
-      c ? { ...c, requestCredits: 0, requestUsd: 0, estimated: false, requestTokens: 0, requestInputTokens: 0, requestOutputTokens: 0 } : c,
+      c ? { ...c, requestCredits: 0, estimated: false, requestTokens: 0, requestInputTokens: 0, requestOutputTokens: 0 } : c,
     );
     streamRef.current = api.chatStream(
       text,

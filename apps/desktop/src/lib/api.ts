@@ -20,11 +20,10 @@ export type CloudCredits = {
 
 // Live LLM-cost meter, applied from `cost` SSE events (see lib backend
 // agent/events.py::ev_cost). `requestCredits` is the running spend for the
-// current user message; `estimated` true → a local token→credit estimate
-// (rendered with a ~) rather than an authoritative gateway charge.
+// current user message; `estimated` true → BYOK/self (no gateway charge), so the
+// meter line shows tokens only, not credits.
 export type CostInfo = {
   requestCredits: number;
-  requestUsd: number;
   conversationCredits: number;
   estimated: boolean;
   balance: number | null;

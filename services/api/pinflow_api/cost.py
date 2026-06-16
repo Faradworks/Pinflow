@@ -97,8 +97,6 @@ class CostMeter:
     conversation_start_balance: Optional[float] = None
     request_start_balance: Optional[float] = None
     last_balance: Optional[float] = None
-    request_usd: float = 0.0
-    conversation_usd: float = 0.0
     request_estimated: bool = False
     conversation_estimated: bool = False
     approved_ceiling: Optional[float] = None
@@ -121,7 +119,6 @@ class CostMeter:
 
     def reset_request(self) -> None:
         self.request_start_balance = None
-        self.request_usd = 0.0
         self.request_estimated = False
         self.approved_ceiling = None
         self.request_input_tokens = 0
@@ -138,7 +135,6 @@ class CostMeter:
         self.conversation_start_balance = None
         self.request_start_balance = None
         self.last_balance = None
-        self.conversation_usd = 0.0
         self.conversation_estimated = False
 
     @property
@@ -192,9 +188,9 @@ class CostMeter:
                 self._charged_sum += charged
                 self._usd_sum += usd
         else:
-            # No gateway figure — local USD estimate (self/BYOK).
-            self.request_usd += usd
-            self.conversation_usd += usd
+            # No gateway charge — BYOK/self path. No USD figure is surfaced
+            # (tokens-only); just flag the scope estimated so the UI shows tokens
+            # rather than credits.
             self.request_estimated = True
             self.conversation_estimated = True
 

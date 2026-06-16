@@ -72,7 +72,6 @@ def ev_cost(meter, *, model: str, provider: str) -> dict:
     return {
         "kind": "cost",
         "request_credits": round(meter.request_credits, 4),
-        "request_usd": round(meter.request_usd, 5),
         "conversation_credits": round(meter.conversation_credits, 4),
         "estimated": meter.request_estimated,
         "balance": meter.last_balance,

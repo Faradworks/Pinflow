@@ -1,6 +1,5 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "//": "Build-only overlay merged in via `tauri build --config src-tauri/tauri.bundle.conf.json`. It declares the PyInstaller `pinflow-api` onedir sidecar (produced by scripts/build_sidecar.sh) as a bundled resource. Kept OUT of the base tauri.conf.json so `tauri dev` — which runs uvicorn from the venv via scripts/dev.sh and never freezes the sidecar — doesn't abort on the missing-glob check.",
   "bundle": {
     "resources": ["binaries/pinflow-api/**/*"]
   }

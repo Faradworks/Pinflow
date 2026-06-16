@@ -91,6 +91,11 @@ class ConversationState:
     # Stashed here so a suspended (ask_user) conversation resumes on the same
     # provider. See pinflow_api/llm.py.
     llm: Optional["LLMConfig"] = None
+    # Provider ("pinflow-cloud" | "self") resolved on the previous message. When
+    # the next message switches provider, run_chat re-anchors the cost meter's
+    # session segment and posts a one-line notice. None until the first message.
+    # See _provider_switch_notice in agent/loop.py.
+    last_provider: Optional[str] = None
     # Live LLM-cost meter (credits this request / conversation), surfaced to the
     # UI via `cost` events and gating the per-request spend cap. See
     # pinflow_api/cost.py and the cost-metering block in agent/loop.py.

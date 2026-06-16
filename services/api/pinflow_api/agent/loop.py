@@ -290,6 +290,23 @@ def _serialize_response(response) -> dict:
     }
 
 
+def _provider_switch_notice(state: st.ConversationState) -> Optional[str]:
+    """If this message switched LLM provider since the last one, start a fresh
+    cost-meter segment (so "session" spend is measured from the switch, not a
+    cloud+BYOK mix — tokens still span the conversation) and return a one-line
+    notice to post in chat. None on the first message or an unchanged provider."""
+    provider = llm.provider_of(state.llm)
+    prev, state.last_provider = state.last_provider, provider
+    if prev is None or prev == provider:
+        return None
+    state.cost.start_segment()
+    if provider == llm.PROVIDER_CLOUD:
+        return ("Now on Pinflow Cloud — credits and the per-request spend cap "
+                "apply from here.")
+    return ("Now using your Anthropic key — Pinflow credits and the spend cap "
+            "don't apply; Anthropic bills you directly.")
+
+
 def run_chat(
     conversation_id: str,
     user_text: str,
@@ -302,11 +319,15 @@ def run_chat(
     state = st.get_or_create(conversation_id)
     if llm_config is not None:
         state.llm = llm_config
+    switch_notice = _provider_switch_notice(state)
     body = _user_text_with_attachments(state, user_text, attachment_ids)
     state.messages.append({"role": "user", "content": body})
     state.cost.reset_request()  # new user message → fresh per-request meter + cap
     _trace(trace, t="user_message", text=body)
     yield ev.ev_meta(conversation_id)
+    if switch_notice:
+        _trace(trace, t="provider_switch", provider=state.last_provider)
+        yield ev.ev_system(switch_notice)
     yield from _drive(state, trace=trace)
 
 

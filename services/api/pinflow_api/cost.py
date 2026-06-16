@@ -128,6 +128,19 @@ class CostMeter:
         self.request_output_tokens = 0
         self.request_cache_tokens = 0
 
+    def start_segment(self) -> None:
+        """Re-anchor the conversation-level credit/USD accumulators — called when
+        the provider switches mid-conversation so "session" spend is measured from
+        the switch, not a cloud+BYOK mix. Deliberately does NOT reset the token
+        tallies (they span providers cleanly) or the observed credit_ratio (a
+        property of the gateway, not the segment). Per-request fields reset
+        separately via reset_request()."""
+        self.conversation_start_balance = None
+        self.request_start_balance = None
+        self.last_balance = None
+        self.conversation_usd = 0.0
+        self.conversation_estimated = False
+
     @property
     def request_tokens(self) -> int:
         return self.request_input_tokens + self.request_output_tokens + self.request_cache_tokens

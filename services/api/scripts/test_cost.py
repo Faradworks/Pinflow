@@ -136,6 +136,27 @@ def test_credit_ratio_observed_not_hardcoded():
     assert _approx(m.credit_ratio, 0.45 / 0.30)      # accumulated, still 1.5
 
 
+def test_start_segment_resets_credits_keeps_tokens_and_ratio():
+    m = cost.CostMeter()
+    # Cloud segment: spend credits, accrue tokens, learn the gateway ratio.
+    m.record(charged=0.30, balance=9.70, usd=0.20, usage=_Usage(input_tokens=100))
+    m.record(charged=0.20, balance=9.50, usd=0.10, usage=_Usage(input_tokens=50))
+    assert _approx(m.conversation_credits, 0.50) and m.conversation_tokens == 150
+    ratio = m.credit_ratio
+
+    # Provider switch → new segment: session credits re-anchor to 0, but the token
+    # tally spans the conversation and the observed ratio is not re-learned.
+    m.start_segment()
+    assert m.conversation_credits == 0.0
+    assert m.conversation_tokens == 150
+    assert m.credit_ratio == ratio
+
+    # The next cloud call measures only the post-switch segment.
+    m.record(charged=0.10, balance=9.40, usd=0.05, usage=_Usage(input_tokens=20))
+    assert _approx(m.conversation_credits, 0.10)
+    assert m.conversation_tokens == 170
+
+
 def test_estimate_followup_usd_scales_with_turns():
     one = cost.estimate_followup_usd("claude-opus-4-8", 30_000, turns=1)
     three = cost.estimate_followup_usd("claude-opus-4-8", 30_000, turns=3)

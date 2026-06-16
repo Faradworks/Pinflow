@@ -40,7 +40,11 @@ fi
 echo "==> create build venv (uv, Python: $PY_REQUEST)"
 cd "$API"
 uv venv --clear "$VENV" --python "$PY_REQUEST"
-uv pip install --python "$VENV" -e . pyinstaller
+# Force a prebuilt cryptography wheel. On the cross-arch path (x86_64 interpreter
+# under Rosetta on an arm64 runner) uv otherwise falls back to a source build,
+# which drags in maturin + a Rust openssl-sys compile that fails for lack of
+# OpenSSL (see release.yml macos-x64). The x86_64 macOS wheel exists; just use it.
+uv pip install --python "$VENV" --only-binary cryptography -e . pyinstaller
 
 # pip installs the console entry point under bin/ (POSIX) or Scripts/ (Windows).
 case "$(uname -s)" in

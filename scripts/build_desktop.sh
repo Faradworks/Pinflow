@@ -20,6 +20,8 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 echo "==> tauri build"
 cd "$ROOT/apps/desktop"
-npm run tauri build
+# --config merges the build-only sidecar resource overlay (see
+# tauri.bundle.conf.json); it's kept out of the base config so `tauri dev` works.
+npm run tauri build -- --config src-tauri/tauri.bundle.conf.json
 
 echo "==> done → apps/desktop/src-tauri/target/release/bundle/"

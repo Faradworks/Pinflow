@@ -21,6 +21,15 @@ service**, so the frontend stays a presentation layer and the logic can move
 between local and hosted backends unchanged. The frontend points at a single
 configurable API URL (default `http://127.0.0.1:8787`).
 
+<Callout type="info">
+  **How the two processes start differs by build.** In the **packaged app** the
+  Python service is frozen by PyInstaller into a sidecar that ships as a Tauri
+  resource; the Rust shell spawns it on launch and reaps it on exit. In **dev**
+  the sidecar isn't built or bundled — [`scripts/dev.sh`](/developers/local-dev)
+  starts `uvicorn` as a separate process, and the shell skips the spawn
+  (`tauri::is_dev()`). Either way the frontend just talks to `127.0.0.1:8787`.
+</Callout>
+
 ## The agent loop
 
 The hero path is a chat-driven agent. Your message streams to the backend,

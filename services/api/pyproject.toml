@@ -25,6 +25,17 @@ dev = [
     "pytest>=8.0",
 ]
 
+[tool.uv]
+# Never source-build cryptography. Both this repo's fresh dev envs (uv resolves
+# an x86_64 CPython under Rosetta on arm64 Macs) and the macos-x64 release
+# sidecar (cross-builds an x86_64 sidecar) lack a working source-build path:
+# building cryptography from source pulls in maturin + a Rust openssl-sys
+# compile that fails for lack of OpenSSL. Pinning to the prebuilt wheel here
+# makes EVERY uv invocation (fresh-clone `uv pip install -e .`, dev.sh, CI
+# sidecar) safe — same effect as `--only-binary cryptography`, but as a project
+# property no call site can forget. See reference: services/api/.venv is x86_64.
+no-build-package = ["cryptography"]
+
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"

@@ -598,6 +598,30 @@ def _metric_wire_through_part(
     )
 
 
+def count_ic_through_wires(sch_text: str) -> int:
+    """Number of wire segments cutting through an IC body — the `wire_through_part`
+    test restricted to ICs. The net-label relabel pass in `netlist_to_sch`
+    guarantees this is 0 (a wire that would span/cut an IC is dropped for a net
+    label instead); exposed for the regression guard in
+    scripts/test_no_ic_wires.py."""
+    try:
+        sch = _load(sch_text)
+    except Exception:  # noqa: BLE001
+        return 0
+    by_ref = _components_by_ref(sch)
+    segs = _wire_segments(sch)
+    n = 0
+    for ref, b in _body_boxes(by_ref).items():
+        if not _is_ic(ref):
+            continue
+        interior = _shrink(b, 1.0)
+        for s in segs:
+            run, span = _seg_interior_run(s, interior)
+            if span > _EPS and run > _THROUGH_FRAC * span:
+                n += 1
+    return n
+
+
 def _metric_wire_orthogonality(segs: list[Seg]) -> MetricResult:
     """Diagonal (non-orthogonal) segments — the strongest wiring smell; a clean
     schematic has none."""

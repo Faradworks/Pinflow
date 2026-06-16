@@ -1143,32 +1143,102 @@ def _ic_keepouts(
     return rects
 
 
-def _wire_router(
-    sch: ksa.Schematic, wired: list, all_pins: list[tuple[float, float]],
-    issues: list[str], rail_y_hints: dict[str, float] | None = None,
-    keepouts: list[tuple[float, float, float, float]] | None = None,
-) -> None:
-    """Wire the IC-touching nets with the crossing-minimising router. `wired`
-    is a list of `(net, pts)` where `pts` are `(ref, pin, xy, comp)` records.
+# A net counts as IC-spanning when its routed path reaches this far past BOTH
+# opposite flanks of the IC body — one full grid step, so a detour that wraps
+# just past one edge never qualifies (`route._outside` snaps one step out).
+_SPAN_PAD = 2.54
 
-    `rail_y_hints` is passed through to `route_nets`; see there for the
-    staircase-trunk-Y use case. `keepouts` are hard no-go rects (the IC body)
-    the router must route around — without them the router is blind to the
-    chip and drives wires straight through it."""
-    routed = route_nets(
+
+def _wire_router(
+    wired: list, all_pins: list[tuple[float, float]],
+    rail_y_hints: dict[str, float] | None = None,
+    keepouts: list[tuple[float, float, float, float]] | None = None,
+) -> list:
+    """Route the IC-touching nets with the crossing-minimising router and
+    return the routed nets (one per input net). `wired` is a list of
+    `(net, pts)` where `pts` are `(ref, pin, xy, comp)` records.
+
+    Wires are NOT committed here — the caller decides per net whether to draw
+    the wire or, for a net that spans the IC side-to-side, drop net labels
+    instead. `rail_y_hints` and `keepouts` pass straight through to
+    `route_nets` (the staircase-trunk-Y and IC keep-out cases)."""
+    return route_nets(
         [(net.name, [p[2] for p in pts]) for net, pts in wired], all_pins,
         rail_y_hints=rail_y_hints, keepouts=keepouts,
     )
+
+
+def _commit_wires(sch: ksa.Schematic, routed: list, issues: list[str]) -> None:
+    """Draw the wire segments of each routed net onto the schematic."""
     for rn in routed:
         for a, b in rn.segments:
             try:
                 sch.add_wire(a, b)
             except Exception as e:
                 issues.append(f"wire on {rn.name}: {e}")
-    issues.append(
-        f"router: {count_crossings(routed)} crossing(s), "
-        f"{count_overlaps(routed)} foreign overlap(s)"
-    )
+
+
+def _net_crosses_ic(rn, ic_rects: list[tuple[float, float, float, float]]) -> bool:
+    """True if the routed net should be a label rather than a wire because its
+    path crosses an IC badly — either of:
+
+    - **Side-to-side span**: reaches past both opposite flanks (`_SPAN_PAD`
+      beyond each) while engaging the IC's perpendicular band — the long run
+      from one side across to the other, through the body OR wrapped around it.
+    - **Through-body cut**: a single segment runs more than half-way through the
+      body interior (the rubric's own `wire_through_part` definition), e.g. a
+      pin diving into the middle of the chip.
+
+    Decided on the ACTUAL routed segments, not pin coordinates, so a same-side
+    run or a clean one-edge wrap (reaches only one flank, never enters the
+    interior) stays a wire. Both crossing cases are eyesores a same-named net
+    label removes cleanly."""
+    if not rn.segments:
+        return False
+    pts = [p for seg in rn.segments for p in seg]
+    xs = [p[0] for p in pts]
+    ys = [p[1] for p in pts]
+    min_x, max_x, min_y, max_y = min(xs), max(xs), min(ys), max(ys)
+    for x0, y0, x1, y1 in ic_rects:
+        # (a) side-to-side span past both opposite flanks, engaging the band.
+        in_yband = any(y0 <= p[1] <= y1 for p in pts)
+        in_xband = any(x0 <= p[0] <= x1 for p in pts)
+        if min_x <= x0 - _SPAN_PAD and max_x >= x1 + _SPAN_PAD and in_yband:
+            return True
+        if min_y <= y0 - _SPAN_PAD and max_y >= y1 + _SPAN_PAD and in_xband:
+            return True
+        # (b) a segment cutting >half-way through the (1mm-shrunk) interior.
+        ix0, iy0, ix1, iy1 = x0 + 1.0, y0 + 1.0, x1 - 1.0, y1 - 1.0
+        if ix1 - ix0 < 1e-6 or iy1 - iy0 < 1e-6:
+            continue
+        for (ax, ay), (bx, by) in rn.segments:
+            if abs(ay - by) < 1e-6 and iy0 < ay < iy1:           # horizontal
+                run = min(max(ax, bx), ix1) - max(min(ax, bx), ix0)
+                if run > 0.5 * (ix1 - ix0):
+                    return True
+            elif abs(ax - bx) < 1e-6 and ix0 < ax < ix1:         # vertical
+                run = min(max(ay, by), iy1) - max(min(ay, by), iy0)
+                if run > 0.5 * (iy1 - iy0):
+                    return True
+    return False
+
+
+def _relabel_spanning(
+    sch: ksa.Schematic, net, pts: list, src_idx: int, text: str,
+    label_specs: list, issues: list[str],
+) -> None:
+    """Drop a net label at every pin of an IC-spanning net except its source
+    pin (which already carries the inline source symbol/label) — connectivity
+    by name, no wire. KiCad merges same-named labels, so topology is preserved
+    while the side-to-side wire disappears."""
+    for i, (ref, pin, xy, comp) in enumerate(pts):
+        if i == src_idx:
+            continue
+        sch.add_label(text=text, position=xy)
+        label_specs.append(
+            LabelSpec(ref=ref, pin=pin, net_name=text, position=xy)
+        )
+    issues.append(f"net {net.name!r} spans the IC — labelled instead of wired")
 
 
 def _wire_star(
@@ -1251,6 +1321,10 @@ def _place_connectivity(
     # the crossing-aware router handles both safely, and `place()` falls back
     # to the star-fan if a routed result fails the connectivity check.
     wired: list = []
+    # For each wired net, the pin index that carries its inline source
+    # symbol/label — so a net later reclassified as IC-spanning can label its
+    # *other* pins without duplicating the source.
+    routed_src: dict[str, int] = {}
     for net in netlist.nets:
         pts = net_pts[net.name]
         if not pts:
@@ -1391,6 +1465,7 @@ def _place_connectivity(
             si = max(non_ic, key=lambda i: abs(pts[i][2][0] - ic_x))
         else:
             si = 0
+        routed_src[net.name] = si
         ref, pin, xy, comp = pts[si]
         if lib_id is not None:
             try:
@@ -1410,9 +1485,29 @@ def _place_connectivity(
     if wiring == "star":
         _wire_star(sch, wired, plan, issues)
     elif wiring == "router":
-        _wire_router(sch, wired, all_pins, issues,
-                     rail_y_hints=rail_y_hints,
-                     keepouts=_ic_keepouts(sch, plan.ics))
+        ic_rects = _ic_keepouts(sch, plan.ics)
+        routed = _wire_router(wired, all_pins, rail_y_hints=rail_y_hints,
+                              keepouts=ic_rects)
+        by_name = {net.name: (net, pts) for net, pts in wired}
+        committed: list = []
+        for rn in routed:
+            net, pts = by_name[rn.name]
+            # A net whose routed path crosses the IC — spans it side-to-side or
+            # cuts through the body — becomes net labels (KiCad merges
+            # same-named labels) instead of a wire; everything else is wired as
+            # routed. Applies even to a net that doesn't touch the IC: a wire
+            # through the chip is an eyesore regardless of whose net it is.
+            if _net_crosses_ic(rn, ic_rects):
+                _relabel_spanning(sch, net, pts, routed_src.get(net.name, -1),
+                                  aliases.get(net.name, net.name),
+                                  label_specs, issues)
+            else:
+                committed.append(rn)
+        _commit_wires(sch, committed, issues)
+        issues.append(
+            f"router: {count_crossings(committed)} crossing(s), "
+            f"{count_overlaps(committed)} foreign overlap(s)"
+        )
     # wiring == "labels": no wires emitted — connectivity is label-borne.
 
     for net in netlist.nets:

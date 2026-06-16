@@ -30,6 +30,9 @@ SMOKE_SCRIPTS = [
     "scripts/test_cost_loop.py",
     "scripts/check_determinism.py",
     "scripts/test_route.py",
+    # No placer may draw a wire through an IC body (spanning/cutting nets are
+    # relabelled instead). Hard invariant across both corpora and placers.
+    "scripts/test_no_ic_wires.py",
     # Invariants + score floors for the prompt-derived netlist corpus
     # (generated_corpus.json). Floors live in the manifest, not here.
     "scripts/test_generated_corpus.py",

@@ -250,6 +250,47 @@ def _hint_route(a: Pt, b: Pt, hint_y: float) -> list[Seg] | None:
     return [s for s in segs if _seg_len(s) > _EPS] or None
 
 
+def _outside(c0: float, c1: float, lo: float, hi: float) -> list[float]:
+    """Grid-snapped trunk coordinates just past `[lo, hi]` on each side — the
+    rail a detour wraps around a keep-out on. Returned only on the side(s) the
+    two pins don't already sit outside of, so a route that already clears the
+    box isn't handed a pointless wrap."""
+    out: list[float] = []
+    left = round((lo - _GRID) / _GRID) * _GRID
+    if left >= lo:
+        left -= _GRID
+    right = round((hi + _GRID) / _GRID) * _GRID
+    if right <= hi:
+        right += _GRID
+    if min(c0, c1) > left:
+        out.append(left)
+    if max(c0, c1) < right:
+        out.append(right)
+    return out
+
+
+def _keepout_detours(a: Pt, b: Pt, keepouts: list[Rect]) -> list[list[Seg]]:
+    """Z-routes whose trunk is pushed just *outside* a keep-out — the way
+    around the IC the between-the-pins L/Z candidates can't express. The
+    local candidates only place a vertical trunk at an x between the two pins
+    (all inside a wide IC) and a horizontal trunk at a y between them; when
+    both pins straddle the chip, every one of those crosses it. Here we add,
+    per keep-out, a vertical trunk just left/right of the box and a horizontal
+    trunk just above/below it. The scorer still chooses — a wrap only wins
+    when it actually dodges the keep-out's `_W_KEEPOUT` and doesn't short."""
+    ax, ay = a
+    bx, by = b
+    out: list[list[Seg]] = []
+    for x0, y0, x1, y1 in keepouts:
+        for tx in _outside(ax, bx, x0, x1):       # vertical trunk beside the box
+            route = [(a, (tx, ay)), ((tx, ay), (tx, by)), ((tx, by), b)]
+            out.append([s for s in route if _seg_len(s) > _EPS])
+        for ty in _outside(ay, by, y0, y1):       # horizontal trunk above/below
+            route = [(a, (ax, ty)), ((ax, ty), (bx, ty)), ((bx, ty), b)]
+            out.append([s for s in route if _seg_len(s) > _EPS])
+    return [r for r in out if r]
+
+
 def _route_edge(
     a: Pt, b: Pt, net: str, placed: list[tuple[str, Seg]],
     blocked: list[Pt], foreign_pins: list[Pt], bodies: list[Rect],
@@ -270,6 +311,8 @@ def _route_edge(
         hinted = _hint_route(a, b, hint_y)
         if hinted is not None:
             cands = [hinted, *cands]
+    if keepouts:
+        cands = cands + _keepout_detours(a, b, keepouts)
     legal = [
         r for r in cands
         if not any(_same(c, p) for c in _corners(r) for p in blocked)

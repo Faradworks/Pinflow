@@ -90,14 +90,45 @@ async def topup(request: Request):
 
 @router.get("/topup/callback")
 async def topup_callback(session_id: str = ""):
+    # The success redirect lands here. Drive the grant via reconcile and report the
+    # ACTUAL outcome — don't claim "credits added" unconditionally. (A swallowed
+    # reconcile failure here once masked a gateway bug where every grant silently
+    # failed while this page still said success.)
+    outcome = await _reconcile(session_id)
+    if outcome == "added":
+        return HTMLResponse(_close_page("Payment complete — credits added. You can close this tab."))
+    if outcome == "pending":
+        return HTMLResponse(_close_page(
+            "Payment received — your credits are being finalized and will appear in a moment."
+        ))
+    return HTMLResponse(_close_page(
+        "Payment received, but we couldn't confirm the credit automatically. It will be "
+        "reconciled shortly — if your balance doesn't update, reopen the top-up.",
+        auto_close=False,
+    ))
+
+
+async def _reconcile(session_id: str) -> str:
+    """POST the Checkout session to the gateway's reconcile and classify the result:
+    "added" (granted now, or already on the account), "pending" (paid but not yet
+    confirmed), or "error" (not signed in / transport / gateway failure). Never
+    raises — this backs a user-facing page."""
     gw, h = _gateway(), _auth()
-    if gw and h and session_id:
-        try:
-            async with httpx.AsyncClient(timeout=30) as c:
-                await c.post(f"{gw}/v1/billing/reconcile", headers=h, json={"session_id": session_id})
-        except Exception:
-            pass
-    return HTMLResponse(_close_page("Payment complete — credits added. You can close this tab."))
+    if not (gw and h and session_id):
+        return "error"
+    try:
+        async with httpx.AsyncClient(timeout=30) as c:
+            r = await c.post(f"{gw}/v1/billing/reconcile", headers=h, json={"session_id": session_id})
+        if r.status_code != 200:
+            return "error"
+        d = r.json()
+        if not d.get("ok"):
+            return "error"
+        if d.get("granted") or d.get("payment_status") == "paid":
+            return "added"
+        return "pending"
+    except Exception:
+        return "error"
 
 
 @router.get("/topup/cancel")
@@ -105,12 +136,18 @@ async def topup_cancel():
     return HTMLResponse(_close_page("Payment canceled. You can close this tab."))
 
 
-def _close_page(msg: str) -> str:
+def _close_page(msg: str, *, auto_close: bool = True) -> str:
+    # Auto-close on success/cancel; keep the tab open on an error so the user can
+    # actually read the message.
+    script = (
+        "<script>setTimeout(()=>{try{window.close()}catch(e){}},1400)</script>"
+        if auto_close else ""
+    )
     return (
         '<!doctype html><html><head><meta charset="utf-8"><title>Pinflow</title>'
         "<style>body{font:14px -apple-system,sans-serif;display:grid;place-items:center;"
         "height:100vh;margin:0;background:#0e0e10;color:#f3f3f1}"
         ".card{padding:28px 32px;border:1px solid #26262a;border-radius:14px;background:#161618}"
         "</style></head><body><div class=\"card\">" + msg + "</div>"
-        "<script>setTimeout(()=>{try{window.close()}catch(e){}},1400)</script></body></html>"
+        + script + "</body></html>"
     )

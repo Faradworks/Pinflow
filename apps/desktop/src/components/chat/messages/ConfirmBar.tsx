@@ -1,13 +1,49 @@
+import type { CSSProperties } from "react";
+
+import type { GateCost } from "../types";
+
 type Props = {
   // The chosen option once answered ("Confirm" / "Discard"); undefined while
   // the prompt is still pending. NOT a boolean — a Discard answer is still an
   // answer, and must not render as a success.
   answer?: string;
+  // Fuzzy "cost to finish from here" range, shown above the buttons while pending.
+  estimate?: GateCost;
   onConfirm: () => void;
   onReject: () => void;
 };
 
-export function ConfirmBar({ answer, onConfirm, onReject }: Props) {
+// Honest, approximate "cost to apply" line. The big upfront cost (e.g. the
+// datasheet read) is already spent by this point, so this is correctly small —
+// it tells the user finishing is cheap, not a false-precise total.
+function CostHint({ estimate }: { estimate: GateCost }) {
+  const { unit, lo, hi, balance } = estimate;
+  const range =
+    unit === "credits"
+      ? `${lo.toFixed(2)}–${hi.toFixed(2)} cr to apply`
+      : `$${lo.toFixed(3)}–$${hi.toFixed(3)} to apply`;
+  const bal =
+    unit === "credits" && balance != null ? ` · ${balance.toFixed(2)} cr left` : "";
+  return (
+    <div style={hintStyle} title="Approximate — the remaining steps are bounded; the upfront work is already done">
+      <span style={{ color: "var(--accent)" }}>⚡</span>
+      <span>≈ {range}</span>
+      {bal && <span style={{ color: "var(--muted)" }}>{bal}</span>}
+    </div>
+  );
+}
+
+const hintStyle: CSSProperties = {
+  display: "flex",
+  alignItems: "center",
+  gap: 6,
+  fontSize: 11,
+  fontFamily: "var(--font-mono)",
+  color: "var(--muted)",
+  padding: "0 2px",
+};
+
+export function ConfirmBar({ answer, estimate, onConfirm, onReject }: Props) {
   if (answer !== undefined) {
     const discarded = answer.toLowerCase() === "discard";
     // The UI only knows the user's *choice* — not whether a commit, stage, or
@@ -57,7 +93,9 @@ export function ConfirmBar({ answer, onConfirm, onReject }: Props) {
     );
   }
   return (
-    <div className="pf-fade-up" style={{ display: "flex", gap: 8, alignItems: "center" }}>
+    <div className="pf-fade-up" style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+      {estimate && <CostHint estimate={estimate} />}
+      <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
       <button
         type="button"
         onClick={onConfirm}
@@ -106,6 +144,7 @@ export function ConfirmBar({ answer, onConfirm, onReject }: Props) {
       >
         Discard
       </button>
+      </div>
     </div>
   );
 }

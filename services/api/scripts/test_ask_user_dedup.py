@@ -60,10 +60,27 @@ def _check_pairing(messages):
                 f"messages.{i}: tool_use ids without tool_result: {dangling}")
 
 
+class _RawWrap:
+    """Mimic the SDK's with_raw_response wrapper: .parse() → the Message, plus
+    .headers (the loop reads gateway credit headers off this; None here)."""
+
+    def __init__(self, response):
+        self._response = response
+        self.headers = None
+
+    def parse(self):
+        return self._response
+
+
 class _StubClient:
     def __init__(self):
         self.calls = 0
-        self.messages = types.SimpleNamespace(create=self._create)
+        # The loop calls messages.with_raw_response.create(...).
+        self.messages = types.SimpleNamespace(
+            with_raw_response=types.SimpleNamespace(
+                create=lambda **kw: _RawWrap(self._create(**kw))
+            )
+        )
 
     def _create(self, *, messages, **_kw):
         self.calls += 1

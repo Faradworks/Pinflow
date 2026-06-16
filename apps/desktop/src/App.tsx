@@ -6,7 +6,7 @@ import type { Message } from "./components/chat/types";
 import { SchematicView } from "./components/schematic/SchematicView";
 import { TitleBar } from "./components/window-shell/TitleBar";
 import type { KicadProject } from "./components/window-shell/KicadStatusChip";
-import { api, type ChatEvent, type StreamHandle } from "./lib/api";
+import { api, type ChatEvent, type CostInfo, type StreamHandle } from "./lib/api";
 import { readTheme, writeTheme, type Theme } from "./lib/theme";
 import { getConfig, clearConfig, type PinflowConfig } from "./lib/config";
 import { OnboardingScreen } from "./components/onboarding/OnboardingScreen";
@@ -84,6 +84,10 @@ function App() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   // Bumped when a turn ends so the title-bar credits chip re-fetches the balance.
   const [creditsRefresh, setCreditsRefresh] = useState(0);
+  // Live per-request LLM cost, driven by `cost` SSE events. The title-bar chip
+  // shows the authoritative post-turn balance; this is the running in-flight
+  // spend for the current message (and persists between turns as the session total).
+  const [cost, setCost] = useState<CostInfo | null>(null);
   const [project, setProject] = useState<KicadProject | null>(null);
   const [messages, setMessages] = useState<Message[]>([]);
   const [draft, setDraft] = useState("");
@@ -159,6 +163,20 @@ function App() {
       if (typeof e.conversation_id === "string") setConversationId(e.conversation_id);
       return;
     }
+    if (e.kind === "cost") {
+      setCost({
+        requestCredits: e.request_credits ?? 0,
+        conversationCredits: e.conversation_credits ?? 0,
+        estimated: !!e.estimated,
+        balance: typeof e.balance === "number" ? e.balance : null,
+        provider: typeof e.provider === "string" ? e.provider : "self",
+        requestTokens: e.request_tokens ?? 0,
+        requestInputTokens: e.request_input_tokens ?? 0,
+        requestOutputTokens: e.request_output_tokens ?? 0,
+        conversationTokens: e.conversation_tokens ?? 0,
+      });
+      return;
+    }
     if (e.kind === "done") {
       setIsStreaming(false);
       // Turn completed without suspending → server has no pending question.
@@ -219,6 +237,7 @@ function App() {
     setConversationId(null);
     setIsStreaming(false);
     setIsAwaitingAnswer(false);
+    setCost(null);
   }
 
   async function onSend() {
@@ -279,6 +298,12 @@ function App() {
       return;
     }
 
+    // Fresh user message → the backend resets its per-request meter; mirror that
+    // so the line shows this request from 0 (keeping the session total). Resume
+    // paths (above, and onAnswer) deliberately don't reset — the request continues.
+    setCost((c) =>
+      c ? { ...c, requestCredits: 0, estimated: false, requestTokens: 0, requestInputTokens: 0, requestOutputTokens: 0 } : c,
+    );
     streamRef.current = api.chatStream(
       text,
       convId,
@@ -435,6 +460,8 @@ function App() {
             onRemoveAttachment={onRemoveAttachment}
             isStreaming={isStreaming}
             onNewSession={onNewSession}
+            cost={cost}
+            cloudMode={config?.mode === "cloud"}
           />
         </div>
         <div style={{ flex: 1, minWidth: 0 }}>
@@ -475,6 +502,7 @@ function eventToMessage(e: ChatEvent): Message | null {
       diff: e.diff,
       confirm: e.confirm,
       locked: e.locked,
+      cost: e.cost ?? null,
     };
   }
   if (e.kind === "tool") {

@@ -17,6 +17,7 @@ import json
 import textwrap
 from typing import Any, Callable, Iterator, Optional
 
+from pinflow_api import cost
 from pinflow_api import llm
 from pinflow_api import staging
 from pinflow_api.settings import settings
@@ -289,6 +290,23 @@ def _serialize_response(response) -> dict:
     }
 
 
+def _provider_switch_notice(state: st.ConversationState) -> Optional[str]:
+    """If this message switched LLM provider since the last one, start a fresh
+    cost-meter segment (so "session" spend is measured from the switch, not a
+    cloud+BYOK mix — tokens still span the conversation) and return a one-line
+    notice to post in chat. None on the first message or an unchanged provider."""
+    provider = llm.provider_of(state.llm)
+    prev, state.last_provider = state.last_provider, provider
+    if prev is None or prev == provider:
+        return None
+    state.cost.start_segment()
+    if provider == llm.PROVIDER_CLOUD:
+        return ("Now on Pinflow Cloud — credits and the per-request spend cap "
+                "apply from here.")
+    return ("Now using your Anthropic key — Pinflow credits and the spend cap "
+            "don't apply; Anthropic bills you directly.")
+
+
 def run_chat(
     conversation_id: str,
     user_text: str,
@@ -301,10 +319,15 @@ def run_chat(
     state = st.get_or_create(conversation_id)
     if llm_config is not None:
         state.llm = llm_config
+    switch_notice = _provider_switch_notice(state)
     body = _user_text_with_attachments(state, user_text, attachment_ids)
     state.messages.append({"role": "user", "content": body})
+    state.cost.reset_request()  # new user message → fresh per-request meter + cap
     _trace(trace, t="user_message", text=body)
     yield ev.ev_meta(conversation_id)
+    if switch_notice:
+        _trace(trace, t="provider_switch", provider=state.last_provider)
+        yield ev.ev_system(switch_notice)
     yield from _drive(state, trace=trace)
 
 
@@ -350,6 +373,27 @@ def run_resume(
         return
 
     state.pending_question = None
+
+    # Cost-cap gate: a Continue/Stop on the per-request spend gate has no backing
+    # tool_use to answer — it just decides whether to keep driving. Handle it
+    # before the tool_result path (which would 400 on the synthetic tool_use_id).
+    if pending.kind == "cost_cap":
+        yield ev.ev_meta(conversation_id)
+        if answer.strip().lower() in ("stop", "cancel", "halt", "no"):
+            _trace(trace, t="cost_cap_resume", answer=answer, decision="stop")
+            yield ev.ev_system(
+                "Stopped before spending more credits. Send a new message to continue."
+            )
+            yield ev.ev_done()
+            return
+        # Continue: approve the REST of this request — don't nag again on every
+        # subsequent turn (one confirmation per request, not per cap-crossing).
+        # reset_request() re-arms the gate on the next user message.
+        state.cost.approved_ceiling = float("inf")
+        _trace(trace, t="cost_cap_resume", answer=answer, decision="continue")
+        yield from _drive(state, trace=trace)
+        return
+
     # The user's answer goes back as the tool_result for the original ask_user.
     # When the model emitted other tool_use blocks alongside ask_user in the
     # same response, those were dispatched eagerly and stashed in
@@ -490,9 +534,11 @@ def _drive(
     tripped: Optional[tuple[str, str]] = None
     tripped_result: Optional[dict] = None
 
-    # Hero path runs on the stronger agent model (Opus by default); extraction/
-    # emit stay on settings.anthropic_model.
-    model = settings.anthropic_agent_model or settings.anthropic_model
+    # Hero path runs on the user-chosen agent model (Opus by default, or Sonnet
+    # via the X-Pinflow-Agent-Model header); extraction/emit stay on
+    # settings.anthropic_model.
+    model = llm.agent_model_id(state.llm)
+    provider = llm.provider_of(state.llm)  # labels the live cost meter
 
     for turn in range(1, _MAX_TURNS + 1):
         context_block = build_context_block(state)
@@ -507,7 +553,10 @@ def _drive(
             messages=state.messages,
         )
         try:
-            response = client.messages.create(
+            # with_raw_response (not .create) so we can read the gateway's
+            # per-call credit headers off `raw.headers`; `.parse()` returns the
+            # same Message .create() would have. Zero behavior change otherwise.
+            raw = client.messages.with_raw_response.create(
                 model=model,
                 max_tokens=4096,
                 # Two prompt-cache breakpoints. The first caches the stable
@@ -536,6 +585,7 @@ def _drive(
                 tools=TOOL_SCHEMAS,
                 messages=state.messages,
             )
+            response = raw.parse()
         except Exception as e:
             _trace(trace, t="error", turn=turn, where="anthropic", error=str(e))
             yield ev.ev_system(_friendly_llm_error(e))
@@ -548,6 +598,24 @@ def _drive(
             turn=turn,
             **_serialize_response(response),
         )
+
+        # Cost meter: on the cloud path the gateway's per-call headers drive an
+        # authoritative balance-delta (which also captures tool-internal calls);
+        # off-gateway (self/BYOK) we show a local USD estimate. Surfaced live so
+        # the UI shows running spend before the post-turn balance refresh. Never
+        # let metering break a turn.
+        cost_event = None
+        try:
+            usage = getattr(response, "usage", None)
+            charged, balance = cost.parse_gateway_credits(getattr(raw, "headers", None))
+            usd = cost.call_cost_usd(model, usage)
+            state.cost.record(charged=charged, balance=balance, usd=usd, usage=usage)
+            cost_event = ev.ev_cost(state.cost, model=model, provider=provider)
+        except Exception as e:  # pragma: no cover — defensive
+            _trace(trace, t="error", turn=turn, where="cost_meter", error=str(e))
+        if cost_event is not None:
+            _trace(trace, t="cost", turn=turn, **{k: v for k, v in cost_event.items() if k != "kind"})
+            yield cost_event
 
         # Persist the assistant turn into state in SDK-shape.
         state.messages.append(
@@ -721,10 +789,28 @@ def _drive(
                 meta=[{"k": "question", "v": _short(question_text)}],
             )
             qid = "q_" + tu.id[:10]
+            # On a Confirm/Discard gate, attach a fuzzy "cost to finish from here"
+            # estimate (rendered on the ConfirmBar) — an honest pre-execution
+            # number for the bounded remaining work, since the whole-conversation
+            # cost is unknowable up front. Staging presence picks the gate type.
+            gate_cost = None
+            if {str(o).strip().lower() for o in options} == {"confirm", "discard"}:
+                staged = (
+                    state.active_sch_path is not None
+                    and staging.get(state.active_sch_path) is not None
+                )
+                try:
+                    gate_cost = cost.gate_estimate(
+                        state.cost, model, state.messages,
+                        staged=staged, provider=provider,
+                    )
+                except Exception:
+                    gate_cost = None
             yield ev.ev_ai(
                 question_text,
                 questions=[{"id": qid, "q": question_text, "options": options}],
                 locked=False,
+                cost=gate_cost,
             )
 
             state.pending_question = st.PendingQuestion(
@@ -752,12 +838,61 @@ def _drive(
             yield ev.ev_system(_breaker_message(tool_name, status, tripped_result))
             yield ev.ev_done()
             return
+
+        # Per-request spend cap: if this user message's running cost crossed the
+        # configured ceiling, pause and ask before driving another LLM turn. The
+        # ceiling is the cap, bumped each time the user clicks Continue (see the
+        # cost_cap branch in run_resume). Disabled when the cap is 0.
+        cap = settings.pinflow_credit_cap_per_request
+        if cap > 0:
+            ceiling = state.cost.approved_ceiling
+            if ceiling is None:
+                ceiling = cap
+            if state.cost.request_credits >= ceiling:
+                _trace(
+                    trace,
+                    t="cost_cap",
+                    turn=turn,
+                    spent=state.cost.request_credits,
+                    cap=cap,
+                )
+                yield from _suspend_cost_cap(state, turn)
+                return
         # Loop back for next LLM turn.
 
     # Hit the safety bound.
     _trace(trace, t="stop", turn=_MAX_TURNS, reason="max_turns")
     yield ev.ev_system(f"max turns ({_MAX_TURNS}) reached — stopping")
     yield ev.ev_done()
+
+
+def _suspend_cost_cap(state: st.ConversationState, turn: int) -> Iterator[dict]:
+    """Suspend the loop at the per-request spend gate. Emits a Continue/Stop
+    question (rendered as a normal QuestionsCard) and stashes a `cost_cap`
+    PendingQuestion; `run_resume` decides whether to keep driving. Reuses the
+    ask_user suspend/resume plumbing — no backing tool_use, so no tool_result."""
+    spent = round(state.cost.request_credits, 2)
+    cap = settings.pinflow_credit_cap_per_request
+    msg = (
+        f"This request has used about {spent} credits, hitting your {cap:g}-credit "
+        f"per-request limit. Continue with the rest of this request?"
+    )
+    qid = f"q_cap_{turn}"
+    yield ev.ev_tool("cost_cap", title="spend limit", meta=[{"k": "used", "v": str(spent)}])
+    yield ev.ev_ai(
+        msg,
+        questions=[{"id": qid, "q": msg, "options": ["Continue", "Stop"]}],
+        locked=False,
+    )
+    state.pending_question = st.PendingQuestion(
+        tool_use_id="__cost_cap__",
+        question_id=qid,
+        options=["Continue", "Stop"],
+        allow_freeform=False,
+        kind="cost_cap",
+    )
+    state.pending_tool_results = []  # nothing pending; messages already valid
+    yield ev.ev_suspended()
 
 
 def _serialize_block(block) -> dict:

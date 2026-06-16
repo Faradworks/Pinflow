@@ -1,5 +1,8 @@
 import { useEffect, useRef } from "react";
+import type { CSSProperties } from "react";
 
+import type { CostInfo } from "../../lib/api";
+import { useEasedNumber } from "../../lib/useEasedNumber";
 import type { KicadProject } from "../window-shell/KicadStatusChip";
 import { ChatInput, type StagedAttachment } from "./ChatInput";
 import { EmptyState } from "./EmptyState";
@@ -21,6 +24,8 @@ type Props = {
   onRemoveAttachment: (key: string) => void;
   isStreaming: boolean;
   onNewSession: () => void;
+  cost?: CostInfo | null;
+  cloudMode?: boolean;
 };
 
 // For an ask_user tool message at index `i`, return whether the linked
@@ -45,6 +50,60 @@ const SUGGESTIONS = [
   "Add JTAG/SWD header",
 ];
 
+// Live running-spend line above the composer. Cloud accounts read authoritative
+// credits from the gateway (the remaining balance lives in the title-bar chip;
+// this is the in-flight spend for the current request, incl. tool calls). BYO-key
+// accounts have no credits — they pay Anthropic directly — so they get the exact
+// token count only (no client-side $ estimate; see CostMeterLine).
+function fmtTokens(n: number): string {
+  const v = Math.round(n);
+  if (v >= 1e6) return `${(v / 1e6).toFixed(2)}M`;
+  if (v >= 1e3) return `${(v / 1e3).toFixed(1)}k`;
+  return String(v);
+}
+
+function CostMeterLine({ cost, cloudMode }: { cost: CostInfo; cloudMode: boolean }) {
+  const showCredits = cloudMode && !cost.estimated;
+  // Cosmetic easing: the meter only gets a new value per completed call (the
+  // gateway is non-streaming), so ease the readout up to each new number instead
+  // of snapping. Hooks must run unconditionally → they precede the early return.
+  const tokens = useEasedNumber(cost.requestTokens);
+  const credits = useEasedNumber(cost.requestCredits);
+  const sessionCredits = useEasedNumber(cost.conversationCredits);
+  if (cost.requestTokens <= 0 && cost.requestCredits <= 0) return null;
+  // Cloud → authoritative credits + the exact token count. BYOK → token count
+  // ONLY: no per-request $ figure. A client-side USD estimate would need a
+  // hand-kept price table and structurally undercounts (it misses tokens a tool
+  // spends internally, e.g. the datasheet read), so a quietly-low number is worse
+  // than none — the exact token count is the honest figure BYOK users get.
+  const credPrefix = showCredits ? `${credits.toFixed(2)} cr · ` : "";
+  const session =
+    showCredits && cost.conversationCredits > cost.requestCredits + 1e-9
+      ? ` · ${sessionCredits.toFixed(2)} cr session`
+      : "";
+  return (
+    <div
+      style={meterStyle}
+      title={`${cost.requestInputTokens.toLocaleString()} in + ${cost.requestOutputTokens.toLocaleString()} out${showCredits ? " · from Pinflow Cloud" : ""}`}
+    >
+      <span style={{ color: "var(--accent)" }}>⚡</span>
+      <span>{credPrefix}{fmtTokens(tokens)} tok this request</span>
+      {session && <span style={{ color: "var(--muted)" }}>{session}</span>}
+    </div>
+  );
+}
+
+const meterStyle: CSSProperties = {
+  display: "flex",
+  alignItems: "center",
+  gap: 6,
+  marginBottom: 8,
+  padding: "0 2px",
+  fontSize: 11,
+  fontFamily: "var(--font-mono)",
+  color: "var(--muted)",
+};
+
 export function ChatPanel({
   messages,
   draft,
@@ -58,6 +117,8 @@ export function ChatPanel({
   onRemoveAttachment,
   isStreaming,
   onNewSession,
+  cost,
+  cloudMode,
 }: Props) {
   const logRef = useRef<HTMLDivElement>(null);
   const started = messages.length > 0;
@@ -164,6 +225,7 @@ export function ChatPanel({
       </div>
 
       <div style={{ padding: "12px 18px 16px", flexShrink: 0 }}>
+        {cost && <CostMeterLine cost={cost} cloudMode={!!cloudMode} />}
         <ChatInput
           value={draft}
           onChange={onDraftChange}

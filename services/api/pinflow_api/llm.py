@@ -59,6 +59,7 @@ class LLMConfig:
     provider: Optional[str] = None  # PROVIDER_SELF | PROVIDER_CLOUD
     api_key: Optional[str] = None   # Anthropic key (self) OR Pinflow JWT (cloud)
     base_url: Optional[str] = None  # gateway base_url (cloud); None = default
+    agent_model: Optional[str] = None  # "opus" | "sonnet" alias for the hero-loop model
 
 
 # Set by llm_scope(); read by make_client()/available() when no explicit cfg is
@@ -131,6 +132,24 @@ def current() -> Optional[LLMConfig]:
     return _current.get()
 
 
+def provider_of(cfg: Optional[LLMConfig] = None) -> str:
+    """Resolved provider name (`self` | `pinflow-cloud`) for `cfg`. Public wrapper
+    over `_resolve` for callers (e.g. cost metering) that only need the provider,
+    not a constructed client."""
+    return _resolve(cfg).provider
+
+
+def agent_model_id(cfg: Optional[LLMConfig] = None) -> str:
+    """Resolve the hero-loop model id. The desktop sends an "opus"/"sonnet" alias
+    (X-Pinflow-Agent-Model): `sonnet` → settings.anthropic_model, anything else
+    (incl. the default `opus` or unset) → settings.anthropic_agent_model."""
+    cfg = cfg if cfg is not None else _current.get()
+    alias = (getattr(cfg, "agent_model", None) or "").strip().lower()
+    if alias == "sonnet":
+        return settings.anthropic_model
+    return settings.anthropic_agent_model or settings.anthropic_model
+
+
 def config_from_headers(headers) -> Optional[LLMConfig]:
     """Build an LLMConfig from request headers, or None when no LLM-routing
     header is present (preserving the pure-settings path).
@@ -139,15 +158,18 @@ def config_from_headers(headers) -> Optional[LLMConfig]:
       X-Pinflow-LLM-Provider: self | pinflow-cloud
       X-Anthropic-Api-Key:    user's own key (self, BYO-keys)
       Authorization:          Bearer <Pinflow JWT> (pinflow-cloud)
+      X-Pinflow-Agent-Model:  opus | sonnet (hero-loop model choice)
     """
     provider = (headers.get("x-pinflow-llm-provider") or "").strip().lower() or None
     auth = headers.get("authorization") or ""
     bearer = auth[7:].strip() if auth[:7].lower() == "bearer " else None
     byo_key = headers.get("x-anthropic-api-key") or None
+    agent_model = (headers.get("x-pinflow-agent-model") or "").strip().lower() or None
 
     if not provider and not bearer and not byo_key:
-        return None  # nothing to route — keep the settings/.env path
+        # Only the model header (if any): keep the settings provider path, carry the model.
+        return LLMConfig(agent_model=agent_model) if agent_model else None
 
     if provider == PROVIDER_CLOUD or (provider is None and bearer):
-        return LLMConfig(provider=PROVIDER_CLOUD, api_key=bearer)
-    return LLMConfig(provider=PROVIDER_SELF, api_key=byo_key)
+        return LLMConfig(provider=PROVIDER_CLOUD, api_key=bearer, agent_model=agent_model)
+    return LLMConfig(provider=PROVIDER_SELF, api_key=byo_key, agent_model=agent_model)

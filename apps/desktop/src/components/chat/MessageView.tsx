@@ -75,6 +75,7 @@ export function MessageView({ message: m, onAnswer, onConfirm, onReject, onSignI
         {confirmQ && (
           <ConfirmBar
             answer={confirmQ.answer}
+            estimate={m.cost ?? undefined}
             onConfirm={() => onAnswer?.(m.id, confirmQ.id, "Confirm")}
             onReject={() => onAnswer?.(m.id, confirmQ.id, "Discard")}
           />

@@ -28,6 +28,7 @@ def ev_ai(
     diff: list[dict] | None = None,
     confirm: bool | None = None,
     locked: bool | None = None,
+    cost: dict | None = None,
 ) -> dict:
     e: dict = {"kind": "ai", "id": new_id(), "text": text}
     if questions is not None:
@@ -38,6 +39,8 @@ def ev_ai(
         e["confirm"] = confirm
     if locked is not None:
         e["locked"] = locked
+    if cost is not None:
+        e["cost"] = cost  # forward "cost to finish" estimate for a Confirm/Discard gate
     return e
 
 
@@ -59,6 +62,27 @@ def ev_resolve_parts(rows: list[dict]) -> dict:
 
 def ev_signin_required(hint: str) -> dict:
     return {"kind": "signin_required", "id": new_id(), "hint": hint}
+
+
+def ev_cost(meter, *, model: str, provider: str) -> dict:
+    """Live cost meter for the running turn. Not a chat Message — the frontend
+    applies it to a standalone running-meter line (App-level state), so it
+    carries no id. `estimated` True → the figure is a local token→credit
+    estimate (shown with a ~), False → authoritative from gateway headers."""
+    return {
+        "kind": "cost",
+        "request_credits": round(meter.request_credits, 4),
+        "conversation_credits": round(meter.conversation_credits, 4),
+        "estimated": meter.request_estimated,
+        "balance": meter.last_balance,
+        "model": model,
+        "provider": provider,
+        # Token counts (agent loop's own calls), shown alongside credits/USD.
+        "request_tokens": meter.request_tokens,
+        "request_input_tokens": meter.request_input_tokens,
+        "request_output_tokens": meter.request_output_tokens,
+        "conversation_tokens": meter.conversation_tokens,
+    }
 
 
 def ev_thinking(text: str, streaming: bool) -> dict:

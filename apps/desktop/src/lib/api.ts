@@ -18,6 +18,23 @@ export type CloudCredits = {
   error?: string;
 };
 
+// Live LLM-cost meter, applied from `cost` SSE events (see lib backend
+// agent/events.py::ev_cost). `requestCredits` is the running spend for the
+// current user message; `estimated` true → BYOK/self (no gateway charge), so the
+// meter line shows tokens only, not credits.
+export type CostInfo = {
+  requestCredits: number;
+  conversationCredits: number;
+  estimated: boolean;
+  balance: number | null;
+  provider: string;
+  // Token counts for the current request (the agent loop's own calls).
+  requestTokens: number;
+  requestInputTokens: number;
+  requestOutputTokens: number;
+  conversationTokens: number;
+};
+
 export type ActiveProject =
   | { detected: false }
   | {
@@ -254,7 +271,7 @@ export const api = {
 
   async cloudTopup(
     amountUsd: number,
-  ): Promise<{ ok: boolean; checkout_url?: string; opened?: boolean; reason?: string }> {
+  ): Promise<{ ok: boolean; checkout_url?: string; opened?: boolean; reason?: string; detail?: string }> {
     const r = await fetch(`${getApiBase()}/cloud/topup`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },

@@ -11,6 +11,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Optional
 
+from pinflow_api.cost import CostMeter
+
 if TYPE_CHECKING:
     from pinflow_api.agent.attachments import AttachmentRef
     from pinflow_api.design_spec import DesignSpec
@@ -21,12 +23,19 @@ if TYPE_CHECKING:
 
 @dataclass
 class PendingQuestion:
-    """Stashed when the model calls ask_user; the loop suspends until resume."""
+    """Stashed when the model calls ask_user; the loop suspends until resume.
+
+    `kind` tells `run_resume` how to interpret the answer: "ask_user" (the
+    default) reattaches it as a tool_result to `tool_use_id`; "cost_cap" is the
+    per-request spend gate, which has no backing tool_use — a Continue/Stop just
+    resumes or ends the drive (see agent/loop.py).
+    """
 
     tool_use_id: str
     question_id: str
     options: list[str]
     allow_freeform: bool
+    kind: str = "ask_user"
 
 
 @dataclass
@@ -82,6 +91,15 @@ class ConversationState:
     # Stashed here so a suspended (ask_user) conversation resumes on the same
     # provider. See pinflow_api/llm.py.
     llm: Optional["LLMConfig"] = None
+    # Provider ("pinflow-cloud" | "self") resolved on the previous message. When
+    # the next message switches provider, run_chat re-anchors the cost meter's
+    # session segment and posts a one-line notice. None until the first message.
+    # See _provider_switch_notice in agent/loop.py.
+    last_provider: Optional[str] = None
+    # Live LLM-cost meter (credits this request / conversation), surfaced to the
+    # UI via `cost` events and gating the per-request spend cap. See
+    # pinflow_api/cost.py and the cost-metering block in agent/loop.py.
+    cost: CostMeter = field(default_factory=CostMeter)
 
 
 _lock = threading.Lock()

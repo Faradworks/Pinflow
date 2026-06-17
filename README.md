@@ -70,21 +70,32 @@ the open-source app.
 > because macOS can't verify the developer, the **first** launch needs one extra
 > click. This is temporary; a notarized build will remove this step entirely.
 
-After dragging **Pinflow** to Applications, do one of the following on first launch:
+On first launch you'll see **"Apple could not verify 'Pinflow' is free of
+malware"** with **Move to Trash** / **Done** buttons. This is expected for a
+non-notarized app — **don't click Move to Trash.** Approve it once, using
+whichever path matches your macOS version:
 
-- **Right-click → Open.** In Finder, right-click (or Control-click) `Pinflow.app`,
-  choose **Open**, then **Open** again in the dialog. macOS remembers your choice,
-  so every launch after that is a normal double-click.
-- **Or, from Terminal**, clear the download quarantine flag:
+- **macOS 15 (Sequoia) and newer:** click **Done**, then open **System Settings
+  → Privacy & Security**, scroll to the *Security* section, and click **Open
+  Anyway** next to "Pinflow was blocked…". Authenticate, then confirm **Open
+  Anyway**. (Apple removed the old right-click → Open shortcut in Sequoia.)
+- **macOS 14 (Sonoma) and earlier:** in Finder, right-click (or Control-click)
+  `Pinflow.app`, choose **Open**, then **Open** again in the dialog.
+- **Any version, from Terminal** — clear the download quarantine flag to skip the
+  dialog entirely:
 
   ```bash
   xattr -dr com.apple.quarantine /Applications/Pinflow.app
   ```
 
-If you ever see **"Pinflow is damaged and can't be opened"** with only a *Move to
-Trash* button, the download was corrupted or partially extracted — re-download
-the `.dmg` and try the steps above. (The app itself is not damaged; that wording
-is Gatekeeper's generic message for an app it can't validate.)
+macOS remembers your approval, so every launch after the first is a normal
+double-click.
+
+> If you instead see **"Pinflow is damaged and can't be opened"** (with *only* a
+> Move to Trash button), the download was corrupted or partially extracted —
+> re-download the `.dmg` and try again. That wording means the bundle failed its
+> signature check outright, which a complete download of a current build should
+> not do.
 
 ## Integrations
 

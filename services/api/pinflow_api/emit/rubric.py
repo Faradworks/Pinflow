@@ -53,6 +53,7 @@ measurement both read symbol geometry.
 
 from __future__ import annotations
 
+import math
 import statistics
 import tempfile
 from dataclasses import dataclass, field
@@ -88,6 +89,19 @@ _OVERLAP_MARGIN = 2.54  # body boxes inset a full pin length before the overlap
                         # gate — `get_component_bounding_box` includes pin
                         # stubs, so parts wired pin-to-pin graze without
                         # colliding; only true body-on-body overlap survives.
+_WIRE_PIN_TOL = 0.05    # mm — a wire endpoint within this of a placed IC pin
+                        # counts that pin as wired. Pins and wire endpoints both
+                        # land on the schematic grid via the same transform, so
+                        # this is pure float-epsilon, never a near-miss bridge.
+_COVERAGE_RAMP = 0.1    # full wire_coverage credit once >=10% of IC pins carry
+                        # a wire. The label-only router fallback is *wholesale*
+                        # — every IC pin a bare label, coverage exactly 0 — so
+                        # the metric only needs to crater near zero. Good
+                        # layouts legitimately run low under the all-pins
+                        # denominator (a dense MCU labels most GPIO/rail pins by
+                        # idiom — rp2040 sits at 0.20), so the ramp hugs zero to
+                        # flag the fallback without punishing sparse-by-design
+                        # wiring.
 
 # Per-metric weight in the aggregate. Sums to 1.0; the aggregate renormalises
 # over whichever metrics were evaluable, so a missing metric doesn't deflate
@@ -98,6 +112,7 @@ _WEIGHTS: dict[str, float] = {
     "label_collision": 0.18,
     "wire_crossings": 0.13,
     "wire_through_part": 0.13,
+    "wire_coverage": 0.13,
     "chain_coherence": 0.10,
     "rail_proximity": 0.08,
     "alignment": 0.10,
@@ -622,6 +637,105 @@ def count_ic_through_wires(sch_text: str) -> int:
     return n
 
 
+def _placed_ic_pins(comps: list) -> dict[str, Pt]:
+    """`pin_number -> (x, y)` in the *placed* frame for an IC's component(s).
+
+    Components loaded from `sch_text` carry an empty `.pins` list (ksa does not
+    populate instance pins on load), so `pinmap.extract_pinmap` reads nothing
+    here. We take the library-local pin offsets from the symbol *definition*
+    (`get_symbol_info(lib_id).pins`) and apply the identical instance transform
+    `netlist_to_sch._pin_xy` uses to place a wire endpoint: flip the library
+    Y-up frame to schematic Y-down, rotate by `-rotation` (KiCad stores a
+    visually-CCW angle, math-CW after the flip), then translate to the symbol
+    origin. Reproducing that exact transform is what makes a placed pin
+    coincide — to float-epsilon — with the wire endpoint the emitter drew
+    there. Multi-unit symbols union their members (last writer per pin number;
+    exact for the single-unit corpus)."""
+    out: dict[str, Pt] = {}
+    for comp in comps:
+        try:
+            sd = ksa.get_symbol_info(comp.lib_id)
+        except Exception:  # noqa: BLE001
+            sd = None
+        if sd is None:
+            continue
+        cx, cy = float(comp.position.x), float(comp.position.y)
+        rot = float(getattr(comp, "rotation", 0.0) or 0.0)
+        ca = sa = 0.0
+        if rot:
+            a = math.radians(-rot)
+            ca, sa = math.cos(a), math.sin(a)
+        for p in getattr(sd, "pins", None) or []:
+            lx, ly = float(p.position.x), float(p.position.y)
+            dx, dy = lx, -ly  # library frame is Y-up; schematic Y-down
+            if rot:
+                dx, dy = dx * ca - dy * sa, dx * sa + dy * ca
+            out[str(p.number)] = (cx + dx, cy + dy)
+    return out
+
+
+def _metric_wire_coverage(
+    plan: LayoutPlan, by_ref: dict[str, list], segs: list[Seg]
+) -> MetricResult:
+    """Fraction of IC pins drawn with a *wire* rather than a bare net label —
+    the anti-fallback guard.
+
+    On a router short the emitter falls back to label-only wiring: zero wires,
+    every IC pin a net label. That output has no wire-crossing / through-part
+    defects, so the rest of the rubric rewards it with a fake ~1.0. This metric
+    craters it — with no wires, no pin is covered.
+
+    The fallback is *wholesale* — every IC pin a bare label, coverage exactly
+    0 — so the metric only has to crater near zero (see `_COVERAGE_RAMP`). A
+    genuinely-wired schematic always has *some* local wiring at the IC, even a
+    dense MCU that labels most GPIO/rail pins by idiom (rp2040 sits at 0.20),
+    so it clears the near-zero ramp and scores 1.0. We count *all* IC pins, not
+    signal-only: a 3-terminal LDO (e.g. ams1117) has no signal nets at all, so
+    a signal-only denominator would render its fallback invisible — the ramp,
+    not net-kind exclusion, is what keeps legitimate label pins from
+    over-penalising a sparse-by-design layout.
+
+    Geometric by necessity — `score()` gets no PlacerResult. Placed pin coords
+    come from `_placed_ic_pins` (symbol-def offsets + the emitter's own
+    transform); the plan supplies only *which* pins (`ic_contacts`), joined by
+    pin number. The plan's own `pin.x/y` are in the canonical pinmap frame, not
+    this schematic's placed frame, so they are deliberately ignored."""
+    placed: dict[str, dict[str, Pt]] = {
+        ic: _placed_ic_pins(by_ref[ic]) for ic in plan.ics if ic in by_ref
+    }
+    # Denominator: every (IC, pin) any net lands on.
+    ic_pins: set[tuple[str, str]] = {
+        (c.ic_refdes, c.pin.number)
+        for nc in plan.nets.values()
+        for c in nc.ic_contacts
+    }
+    total = len(ic_pins)
+    if total == 0:
+        return MetricResult("wire_coverage", 0.0, None,
+                            _WEIGHTS["wire_coverage"], "no IC pins on nets")
+
+    endpoints: set[Pt] = set()
+    for a, b in segs:
+        endpoints.add(a)
+        endpoints.add(b)
+
+    def _wired(pt: Pt) -> bool:
+        px, py = pt
+        return any(abs(px - ex) <= _WIRE_PIN_TOL and abs(py - ey) <= _WIRE_PIN_TOL
+                   for ex, ey in endpoints)
+
+    covered = sum(
+        1 for ic, pn in ic_pins
+        if pn in placed.get(ic, {}) and _wired(placed[ic][pn])
+    )
+    coverage = covered / total
+    return MetricResult(
+        "wire_coverage", coverage, min(1.0, coverage / _COVERAGE_RAMP),
+        _WEIGHTS["wire_coverage"],
+        f"{covered}/{total} IC pins wired",
+    )
+
+
 def _metric_wire_orthogonality(segs: list[Seg]) -> MetricResult:
     """Diagonal (non-orthogonal) segments — the strongest wiring smell; a clean
     schematic has none."""
@@ -1047,6 +1161,7 @@ def score(
                 _metric_flow(plan, pos),
                 _metric_chain_coherence(plan, netlist, pos),
                 _metric_rail_proximity(netlist, plan, pos, text_boxes),
+                _metric_wire_coverage(plan, by_ref, segs),
             ]
         except Exception as e:  # noqa: BLE001
             notes.append(f"classify failed — group metrics skipped: "

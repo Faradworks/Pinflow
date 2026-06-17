@@ -1175,6 +1175,35 @@ def _ic_keepouts(
     return rects
 
 
+def _passive_bodies(
+    sch: ksa.Schematic,
+    placed_refs: dict[str, tuple[float, float]],
+    ics: list[str],
+) -> list[tuple[float, float, float, float]]:
+    """Body rects of the non-IC parts (caps, resistors, diodes, inductors),
+    fed to the router as SOFT obstacles (`route_nets(bodies=...)`) so a wire
+    deters cutting through a passive body. Soft, not a hard keep-out: a
+    horizontal fan-out wire to several parallel parts lands on their pins (the
+    box edge), not the interior, so `route._seg_hits_rect` never flags it —
+    only a wire that traverses a body does. Deterministic: refs in sorted
+    order. Power symbols (`#PWR`/`#FLG`) and the ICs (already keep-outs) are
+    skipped."""
+    ic_set = set(ics)
+    rects: list[tuple[float, float, float, float]] = []
+    for ref in sorted(placed_refs):
+        if ref.startswith("#") or ref in ic_set:
+            continue
+        comp = sch.components.get(ref)
+        if comp is None:
+            continue
+        try:
+            bb = get_component_bounding_box(comp, include_properties=False)
+        except Exception:  # noqa: BLE001 — a missing symbol just skips keep-out
+            continue
+        rects.append((bb.min_x, bb.min_y, bb.max_x, bb.max_y))
+    return rects
+
+
 # A net counts as IC-spanning when its routed path reaches this far past BOTH
 # opposite flanks of the IC body — one full grid step, so a detour that wraps
 # just past one edge never qualifies (`route._outside` snaps one step out).
@@ -1185,6 +1214,7 @@ def _wire_router(
     wired: list, all_pins: list[tuple[float, float]],
     rail_y_hints: dict[str, float] | None = None,
     keepouts: list[tuple[float, float, float, float]] | None = None,
+    bodies: list[tuple[float, float, float, float]] | None = None,
 ) -> list:
     """Route the IC-touching nets with the crossing-minimising router and
     return the routed nets (one per input net). `wired` is a list of
@@ -1192,11 +1222,11 @@ def _wire_router(
 
     Wires are NOT committed here — the caller decides per net whether to draw
     the wire or, for a net that spans the IC side-to-side, drop net labels
-    instead. `rail_y_hints` and `keepouts` pass straight through to
-    `route_nets` (the staircase-trunk-Y and IC keep-out cases)."""
+    instead. `rail_y_hints`, `keepouts` (hard, the IC) and `bodies` (soft, the
+    passives) pass straight through to `route_nets`."""
     return route_nets(
         [(net.name, [p[2] for p in pts]) for net, pts in wired], all_pins,
-        rail_y_hints=rail_y_hints, keepouts=keepouts,
+        rail_y_hints=rail_y_hints, keepouts=keepouts, bodies=bodies,
     )
 
 
@@ -1548,8 +1578,9 @@ def _place_connectivity(
         _wire_star(sch, wired, plan, issues)
     elif wiring == "router":
         ic_rects = _ic_keepouts(sch, plan.ics)
+        body_rects = _passive_bodies(sch, placed_refs, plan.ics)
         routed = _wire_router(wired, all_pins, rail_y_hints=rail_y_hints,
-                              keepouts=ic_rects)
+                              keepouts=ic_rects, bodies=body_rects)
         by_name = {net.name: (net, pts) for net, pts in wired}
         committed: list = []
         for rn in routed:

@@ -48,7 +48,10 @@ _W_KEEPOUT = 500.0    # a segment crossing a hard keep-out (the IC body) — nev
                       # the router detours around the IC yet never trades a
                       # genuine short to do it.
 _W_CROSS = 10.0       # one wire-wire crossing — readability only
-_W_BODY = 4.0         # one segment cutting through a (soft) component body
+_W_BODY = 10.0        # one segment cutting through a (soft) passive body — set
+                      # equal to _W_CROSS so the router routes AROUND a passive
+                      # rather than slicing it, but still never trades a short
+                      # (1000) or an IC keep-out (500) to dodge a soft body.
 _W_STUB = 6.0         # per missing stub — corner landing flush on a pin
 _W_LEN = 0.01         # per mm — a tie-breaker only
 _MAX_Z = 6            # cap on Z-route midpoints tried per edge

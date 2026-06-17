@@ -89,3 +89,6 @@ apps/desktop/src-tauri/binaries/
 
 # Generated force-sim traces for the layout viewer (dev/layout-sim/index.html)
 dev/layout-sim/*.json
+
+# KiCad Local History — automatic per-project backup snapshots (safe to delete)
+.history/

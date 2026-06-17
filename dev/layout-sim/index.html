@@ -33,6 +33,27 @@
             background:rgba(20,24,32,.8); border:1px solid var(--line); border-radius:6px; padding:6px 9px; }
   .legend i { display:inline-block; width:11px; height:3px; vertical-align:middle; margin-right:5px; }
   input[type=range].sp { width:90px; accent-color:var(--acc); }
+  #tune { position:absolute; left:10px; top:10px; width:226px; max-height:calc(100% - 20px);
+          overflow:auto; background:rgba(20,24,32,.93); border:1px solid var(--line);
+          border-radius:8px; padding:10px 11px; backdrop-filter:blur(2px); }
+  #tune.hide { display:none; }
+  #tune h4 { margin:0 0 7px; font-size:11px; letter-spacing:.04em; text-transform:uppercase;
+             color:var(--acc); }
+  .trow { display:flex; align-items:center; gap:6px; margin:3px 0; }
+  .trow label { width:80px; color:var(--mut); font-size:11px; cursor:help; }
+  .trow input[type=range] { flex:1; min-width:0; accent-color:var(--acc); }
+  .trow .val { width:40px; text-align:right; font-size:11px; color:var(--ink);
+               font-variant-numeric:tabular-nums; }
+  .trow.star { border-left:2px solid var(--acc); margin-left:-11px; padding-left:9px; }
+  .trow.star label { color:var(--acc); font-weight:bold; }
+  #tune select { flex:1; min-width:0; background:#222936; color:var(--ink);
+                 border:1px solid var(--line); border-radius:5px; padding:3px 4px; font:inherit; }
+  #tune .tsep { height:1px; background:var(--line); margin:8px 0; }
+  #tune button { background:#222936; color:var(--ink); border:1px solid var(--line);
+                 border-radius:5px; padding:4px 9px; cursor:pointer; font:inherit; }
+  #tune button:hover { border-color:var(--acc); }
+  #tstat { font-size:10px; color:var(--mut); margin-left:6px; }
+  #tstat.err { color:var(--rail); }
 </style>
 </head>
 <body>
@@ -54,6 +75,14 @@
   </div>
   <div id="wrap">
     <canvas id="cv"></canvas>
+    <div id="tune" class="hide">
+      <h4>live tuner</h4>
+      <div class="trow"><label title="circuit to relax">fixture</label><select id="fixture"></select></div>
+      <div class="tsep"></div>
+      <div id="sliders"></div>
+      <div class="tsep"></div>
+      <div class="trow"><button id="reset">reset defaults</button><span id="tstat"></span></div>
+    </div>
     <div id="drop">drop a <b>graph.json</b> here (or use “Load JSON”)<br>
       <span style="font-size:11px">generate with: <code>scripts/dump_layout_graph.py &lt;fixture&gt; --trace --out dev/layout-sim/graph.json</code></span></div>
     <div class="legend">
@@ -209,8 +238,63 @@ wrap.ondragover=e=>{e.preventDefault();}; wrap.ondrop=e=>{e.preventDefault();
 window.onresize=()=>DATA&&draw();
 raf=requestAnimationFrame(loop);
 
-// auto-load graph.json if served over http(s); file:// will fall back to the picker
-fetch('graph.json').then(r=>r.ok?r.json():Promise.reject()).then(setData).catch(()=>{});
+// --- live tuner (server mode: scripts/dump_layout_graph.py --serve) ----------
+// Sliders re-request /api/trace, which runs the real fdcore.simulate — no JS
+// physics. Per-gain [min,max,step]; unknown gains get a generic range.
+const RANGES = {
+  attract:[0,3,0.05], repel:[0,20,0.5], repel_aniso:[0.5,4,0.05],
+  gravity_rail:[0,3,0.05], gravity_gnd:[0,3,0.05], flow:[0,3,0.05], side:[0,4,0.05],
+  iters:[100,1500,50], margin:[0,6,0.254],
+};
+const TIP = {
+  repel_aniso:'axis bias for overlap resolution — >1 makes horizontal separation cheaper, so same-net clusters fan into a row',
+  attract:'star pull of each pin toward its net centroid',
+  repel:'AABB-overlap push between bodies (per mm)',
+  gravity_rail:'upward drift on rail-touching parts', gravity_gnd:'downward drift on ground-touching parts',
+  flow:'left→right bias by role (input←, output→)', side:'barrier pushing supports past their IC edge',
+  iters:'relaxation steps', margin:'symbol_overlap gate margin (mm)',
+};
+let DEFAULTS=null, traceTimer=0;
+const fmt=(k,v)=> k==='iters' ? String(v|0) : (+v).toFixed(2);
+
+function buildPanel(def){
+  DEFAULTS=def;
+  const fx=$('fixture'); fx.innerHTML='';
+  for(const n of def.fixtures){ const o=document.createElement('option'); o.value=o.textContent=n; fx.appendChild(o); }
+  if(def.fixtures.includes('mcu_rp2040')) fx.value='mcu_rp2040';  // the fixture this knob moves most
+  const host=$('sliders'); host.innerHTML='';
+  const items=[...Object.entries(def.gains), ['iters',def.iters], ['margin',def.margin]];
+  for(const [k,v] of items){
+    const [mn,mx,st]=RANGES[k]||[0,Math.max(2,(+v)*3),0.05];
+    const row=document.createElement('div'); row.className='trow'+(k==='repel_aniso'?' star':'');
+    row.innerHTML=`<label title="${(TIP[k]||'').replace(/"/g,'&quot;')}">${k}</label>`
+      +`<input type="range" min="${mn}" max="${mx}" step="${st}" value="${v}" data-key="${k}">`
+      +`<span class="val">${fmt(k,v)}</span>`;
+    const inp=row.querySelector('input'), val=row.querySelector('.val');
+    inp.oninput=()=>{ val.textContent=fmt(k,inp.value); scheduleTrace(); };
+    host.appendChild(row);
+  }
+  fx.onchange=requestTrace;
+  $('reset').onclick=()=>{ for(const inp of host.querySelectorAll('input')){ const k=inp.dataset.key;
+    const d=k==='iters'?def.iters:k==='margin'?def.margin:def.gains[k];
+    inp.value=d; inp.nextElementSibling.textContent=fmt(k,d); } requestTrace(); };
+  $('tune').classList.remove('hide');
+  requestTrace();
+}
+function scheduleTrace(){ clearTimeout(traceTimer); traceTimer=setTimeout(requestTrace,250); }
+function requestTrace(){
+  const p=new URLSearchParams(); p.set('fixture',$('fixture').value);
+  for(const inp of $('sliders').querySelectorAll('input')) p.set(inp.dataset.key,inp.value);
+  const st=$('tstat'); st.className=''; st.textContent='computing…';
+  fetch('/api/trace?'+p).then(r=>r.json()).then(d=>{
+    if(d.error){ st.className='err'; st.textContent=d.error; return; }
+    setData(d); st.textContent='';
+  }).catch(()=>{ st.className='err'; st.textContent='request failed'; });
+}
+
+// Server mode → build the tuner. Otherwise fall back to graph.json / the picker.
+fetch('/api/defaults').then(r=>r.ok?r.json():Promise.reject()).then(buildPanel)
+  .catch(()=> fetch('graph.json').then(r=>r.ok?r.json():Promise.reject()).then(setData).catch(()=>{}));
 </script>
 </body>
 </html>

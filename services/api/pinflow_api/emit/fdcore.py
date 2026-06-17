@@ -82,6 +82,14 @@ class Edge:
 DEFAULT_GAINS: dict[str, float] = {
     "attract": 1.0,       # star attraction toward net centroids
     "repel": 8.0,         # AABB-overlap push (per mm of penetration)
+    "repel_aniso": 1.25,  # axis preference for overlap resolution: 1.0 = pure
+                          # least-penetration (isotropic); >1 makes horizontal
+                          # separation "cheaper" so collapsed same-net clusters
+                          # (cap banks, parallel shunts) fan into a row instead
+                          # of a column — choose x unless y-penetration is >K×
+                          # smaller (see `_repulsion`). 1.25 swept Pareto-best
+                          # across the corpus (mcu_rp2040 .66→.93, nothing
+                          # regressed); K≥1.5 trades fixtures non-monotonically.
     "gravity_rail": 0.5,  # constant upward bias on rail-touching parts
     "gravity_gnd": 0.5,   # constant downward bias on ground-touching parts
     "flow": 0.5,          # constant left/right bias by role (input←, output→)
@@ -255,8 +263,16 @@ def _repulsion(nodes, g, margin, fx, fy) -> None:
     gradient; the pinned IC is included as an obstacle so supports settle just
     outside its body (their pins still reach the edge pins) instead of
     collapsing onto it — free w.r.t. the gate, which excludes IC pairs anyway.
-    A both-pinned pair is a no-op."""
+    A both-pinned pair is a no-op.
+
+    `repel_aniso` (K) tilts the axis choice: x is picked whenever `ox <= oy*K`,
+    so K>1 makes horizontal separation "cheaper" than the true least-penetration
+    axis. A same-net cluster that attraction has collapsed to a point is ~square
+    (ox≈oy), so the bias decides whether it fans into a row (idiomatic — caps
+    hanging off a horizontal rail) or a column. The full chosen-axis penetration
+    is still resolved, so the pair always ends non-overlapping (stable)."""
     gr = g["repel"]
+    aniso = g.get("repel_aniso", 1.0)
     for i in range(len(nodes)):
         a = nodes[i]
         for j in range(i + 1, len(nodes)):
@@ -269,7 +285,7 @@ def _repulsion(nodes, g, margin, fx, fy) -> None:
             oy = (a.hy + b.hy + margin) - abs(dy)
             if ox <= 0 or oy <= 0:
                 continue
-            if ox <= oy:
+            if ox <= oy * aniso:
                 push = gr * ox
                 s = 1.0 if dx >= 0 else -1.0
                 if not a.pinned:

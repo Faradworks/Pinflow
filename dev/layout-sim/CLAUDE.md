@@ -48,10 +48,18 @@ cd services/api
 # determinism (must stay green)
 .venv/bin/python scripts/check_determinism.py --placer fdplace
 
-# viewer: trace a circuit, then serve this dir and open it
+# viewer (static): trace a circuit, then serve this dir and open it
 .venv/bin/python scripts/dump_layout_graph.py mcu_rp2040 --trace --out ../../dev/layout-sim/graph.json
 cd ../../dev/layout-sim && python3 -m http.server 8777      # → http://localhost:8777
+
+# viewer (live tuner): sliders re-run the REAL fdcore.simulate per change
+.venv/bin/python scripts/dump_layout_graph.py --serve        # → http://127.0.0.1:8777
 ```
+
+The live tuner (`--serve`) adds an `/api/trace` endpoint the viewer's gain sliders
+hit on every change; the server runs `fdplace.trace_layout` with the requested
+gains and the page re-animates. No JS physics — the single-source-of-truth rule
+holds. This is how `repel_aniso` was tuned.
 
 Golden netlist fixtures (`tests/fixtures/golden/*.netlist.json`) are gitignored/derived; regenerate
 with `scripts/sch_to_netlist.py <golden>.kicad_sch` if missing (or run `check_all.py`).
@@ -64,7 +72,11 @@ with `scripts/sch_to_netlist.py <golden>.kicad_sch` if missing (or run `check_al
   Python floats — keep it that way (no `set`/`dict` iteration in the hot loop, no numpy reductions).
 - **Global gain tuning is sensitive and non-monotonic.** Sweeping one gain trades fixtures
   unpredictably (flow 0.5→5/7, 1.0→2/7, 1.5→4/7). Prefer structural/snap fixes and fixture-specific
-  gating (e.g. the dense-IC gate in `_snap_groups`) over chasing global gains.
+  gating (e.g. the dense-IC gate in `_snap_groups`) over chasing global gains. The exception that
+  proves the rule: `repel_aniso=1.25` was a clean Pareto win (mcu_rp2040 .66→.93, nothing regressed)
+  precisely because it's *structural* — it biases *which axis* resolves an overlap, not a force
+  magnitude — so it can't blow the system up the way scaling `repel`/`attract` does. Magnitudes
+  trade; axis preference just rotates the same settled energy. (Found via the `--serve` tuner.)
 - **Don't regress cplace.** `fdplace` is additive; `auto`/`DEFAULT_PLACER` are untouched on purpose.
   Promotion (M4) must be gated behind a full `check_all.py` pass.
 - **label_collision is text-on-text only** (rubric excludes same-owner and text-on-wire). The label

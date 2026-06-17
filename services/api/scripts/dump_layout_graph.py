@@ -38,11 +38,14 @@ from pinflow_api.emit.netlist import (
 )
 
 _FIX = Path(__file__).resolve().parents[1] / "tests" / "fixtures"
+_VIEWER = Path(__file__).resolve().parents[3] / "dev" / "layout-sim"
 _PASSIVE_PREFIXES = ("Device:R", "Device:C", "Device:L", "Device:D", "Device:LED")
 
 
 def _resolve_fixture(arg: str) -> Path:
-    """Accept a path or a bare corpus name (generated/ then golden/)."""
+    """Accept a path or a bare corpus name (generated/ then golden/). Raises
+    FileNotFoundError (not sys.exit) so the live server can report it without
+    dying."""
     p = Path(arg)
     if p.exists():
         return p
@@ -51,7 +54,8 @@ def _resolve_fixture(arg: str) -> Path:
         cand = _FIX / sub / stem
         if cand.exists():
             return cand
-    sys.exit(f"fixture not found: {arg!r} (looked in {_FIX}/generated and /golden)")
+    raise FileNotFoundError(
+        f"fixture not found: {arg!r} (looked in {_FIX}/generated and /golden)")
 
 
 def _axis_snap(dx: float, dy: float) -> tuple[float, float]:
@@ -151,17 +155,128 @@ def build_graph(netlist: Netlist, name: str) -> dict:
     return {"name": name, "nodes": nodes, "edges": edges}
 
 
+# --- live tuner server ------------------------------------------------------
+#
+# `--serve` turns the viewer into a live gain-tuning console: the browser's
+# sliders re-request `/api/trace?fixture=…&repel_aniso=…&…`, this handler runs
+# the *real* `fdplace.trace_layout` with those gains, and the page re-animates.
+# The single-source-of-truth rule holds — there is no JS physics; the server
+# always runs the production `fdcore.simulate`.
+
+def _list_fixtures() -> list[str]:
+    names: set[str] = set()
+    for sub in ("generated", "golden"):
+        d = _FIX / sub
+        if d.is_dir():
+            for p in d.glob("*.netlist.json"):
+                names.add(p.name[: -len(".netlist.json")])
+    return sorted(names)
+
+
+def _trace_payload(query: dict[str, list[str]]) -> dict:
+    """Build a `SimConfig` from query params (any DEFAULT_GAINS key, plus
+    `iters`/`margin`) and return the viewer trace for `?fixture=`."""
+    from pinflow_api.emit import fdcore
+    from pinflow_api.emit.placers.fdplace import trace_layout
+
+    fixture = (query.get("fixture") or [None])[0]
+    if not fixture:
+        raise ValueError("missing ?fixture=")
+    path = _resolve_fixture(fixture)
+    netlist = Netlist.model_validate(json.loads(path.read_text()))
+
+    gains = dict(fdcore.DEFAULT_GAINS)
+    for key in fdcore.DEFAULT_GAINS:
+        if key in query:
+            gains[key] = float(query[key][0])
+    base = fdcore.SimConfig()
+    iters = int(query["iters"][0]) if "iters" in query else base.iters
+    margin = float(query["margin"][0]) if "margin" in query else base.margin
+    cfg = fdcore.SimConfig(gains=gains, iters=iters, margin=margin)
+
+    name = path.stem.replace(".netlist", "")
+    return trace_layout(netlist, title=name, cfg=cfg)
+
+
+def _serve(port: int) -> None:
+    from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
+    from urllib.parse import parse_qs, urlparse
+
+    from pinflow_api.emit import fdcore
+
+    viewer = str(_VIEWER)
+
+    class Handler(SimpleHTTPRequestHandler):
+        def __init__(self, *a, **kw):
+            super().__init__(*a, directory=viewer, **kw)
+
+        def _send_json(self, code: int, obj: dict) -> None:
+            body = json.dumps(obj).encode()
+            self.send_response(code)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
+            self.wfile.write(body)
+
+        def do_GET(self):  # noqa: N802
+            u = urlparse(self.path)
+            if u.path == "/api/defaults":
+                base = fdcore.SimConfig()
+                return self._send_json(200, {
+                    "gains": dict(fdcore.DEFAULT_GAINS),
+                    "iters": base.iters,
+                    "margin": base.margin,
+                    "fixtures": _list_fixtures(),
+                })
+            if u.path == "/api/trace":
+                try:
+                    return self._send_json(200,
+                                           _trace_payload(parse_qs(u.query)))
+                except Exception as e:  # noqa: BLE001
+                    return self._send_json(400,
+                                           {"error": f"{type(e).__name__}: {e}"})
+            return super().do_GET()
+
+        def log_message(self, *a):  # quiet the per-request access log
+            pass
+
+    httpd = ThreadingHTTPServer(("127.0.0.1", port), Handler)
+    print(f"layout-sim live tuner → http://127.0.0.1:{port}/  (Ctrl-C to stop)",
+          file=sys.stderr)
+    try:
+        httpd.serve_forever()
+    except KeyboardInterrupt:
+        print("\nstopped.", file=sys.stderr)
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("fixture", help="path or bare corpus name (e.g. buck_tps62840)")
+    ap.add_argument("fixture", nargs="?",
+                    help="path or bare corpus name (e.g. buck_tps62840)")
     ap.add_argument("--out", help="write JSON here (default: stdout)")
     ap.add_argument("--trace", action="store_true",
                     help="run fdplace's force sim and dump {graph, frames, "
                          "snapped} for dev/layout-sim/index.html to animate")
+    ap.add_argument("--serve", action="store_true",
+                    help="serve dev/layout-sim/ with a live gain-tuning API "
+                         "(sliders re-run the real sim); ignores fixture/--out")
+    ap.add_argument("--port", type=int, default=8777,
+                    help="port for --serve (default 8777)")
     args = ap.parse_args()
 
-    path = _resolve_fixture(args.fixture)
+    if args.serve:
+        _serve(args.port)
+        return
+
+    if not args.fixture:
+        ap.error("fixture is required (or pass --serve)")
+
+    try:
+        path = _resolve_fixture(args.fixture)
+    except FileNotFoundError as e:
+        sys.exit(str(e))
     netlist = Netlist.model_validate(json.loads(path.read_text()))
     errs = netlist.validate_self()
     if errs:

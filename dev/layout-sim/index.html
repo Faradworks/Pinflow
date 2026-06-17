@@ -24,8 +24,30 @@
   #hud { color:var(--mut); white-space:nowrap; }
   #hud b { color:var(--ink); }
   #hud .warn { color:var(--rail); }
-  #wrap { flex:1; position:relative; }
+  #wrap { flex:1; display:flex; min-height:0; }
+  #simpane { flex:1; position:relative; min-width:0; }
   canvas { display:block; width:100%; height:100%; }
+  /* right pane: the real kicad-cli render of the settled layout (server mode only) */
+  #renderpane { display:none; width:42%; min-width:220px; flex-direction:column;
+                border-left:1px solid var(--line); background:#0e1117; }
+  body.live #renderpane { display:flex; }
+  #renderpane .cap { padding:6px 10px; color:var(--mut); font-size:11px;
+                     border-bottom:1px solid var(--line); white-space:nowrap;
+                     overflow:hidden; text-overflow:ellipsis; }
+  #renderpane .cap b { color:var(--ink); }
+  #rbox { flex:1; position:relative; display:flex; align-items:center;
+          justify-content:center; padding:10px; min-height:0; }
+  #rimg { max-width:100%; max-height:100%; object-fit:contain; background:#fff;
+          border-radius:4px; display:none; box-shadow:0 2px 12px rgba(0,0,0,.5); }
+  #rstat { position:absolute; top:10px; left:0; right:0; text-align:center;
+           color:var(--mut); font-size:11px; pointer-events:none; }
+  #rstat.err { color:var(--rail); }
+  /* instant, styled tooltip (replaces native title= which renders unreliably) */
+  #tip { position:fixed; z-index:1000; max-width:280px; pointer-events:none;
+         background:#0c0f14; color:var(--ink); border:1px solid var(--acc);
+         border-radius:6px; padding:6px 8px; font-size:11px; line-height:1.45;
+         box-shadow:0 6px 18px rgba(0,0,0,.55); opacity:0; transition:opacity .07s; }
+  #tip.show { opacity:1; }
   #drop { position:absolute; inset:0; display:flex; align-items:center; justify-content:center;
           color:var(--mut); pointer-events:none; text-align:center; }
   #drop.hide { display:none; }
@@ -59,37 +81,44 @@
 <body>
 <div id="app">
   <div id="bar">
-    <label class="btn">Load JSON<input id="file" type="file" accept=".json" hidden></label>
+    <label class="btn" data-tip="load a static trace dump (graph.json from dump_layout_graph.py <fixture> --trace)">Load JSON<input id="file" type="file" accept=".json" hidden></label>
     <span class="sep"></span>
-    <button id="back" title="step back">⏮</button>
-    <button id="play">▶ play</button>
-    <button id="fwd" title="step forward">⏭</button>
-    <input id="scrub" type="range" min="0" max="0" value="0">
+    <button id="back" data-tip="step one iteration back">⏮</button>
+    <button id="play" data-tip="play / pause the relaxation animation">▶ play</button>
+    <button id="fwd" data-tip="step one iteration forward">⏭</button>
+    <input id="scrub" type="range" min="0" max="0" value="0" data-tip="scrub through the relaxation iterations (frames)">
     <span class="sep"></span>
-    <label class="chk">speed <input id="speed" class="sp" type="range" min="1" max="10" value="3"></label>
-    <label class="chk"><input id="gate" type="checkbox" checked> gate boxes</label>
-    <label class="chk"><input id="trunk" type="checkbox" checked> net trunks</label>
-    <button id="snap" title="show final post-snap layout">show snapped</button>
+    <label class="chk" data-tip="animation playback speed (frames advanced per tick)">speed <input id="speed" class="sp" type="range" min="1" max="10" value="3"></label>
+    <label class="chk" data-tip="show each non-IC body's keep-out box (half-size + margin); a box turns red when two overlap — that pair is the symbol_overlap penalty the repulsion force fights"><input id="gate" type="checkbox" checked> gate boxes</label>
+    <label class="chk" data-tip="draw each net as pin stubs + L-routes to the net centroid (the star-attraction target each pin is pulled toward)"><input id="trunk" type="checkbox" checked> net trunks</label>
+    <button id="snap" data-tip="toggle the final grid-snapped layout (what the placer emits, after force-relaxation + snap/label)">show snapped</button>
     <span class="sep"></span>
     <span id="hud">—</span>
   </div>
   <div id="wrap">
+    <div id="simpane">
     <canvas id="cv"></canvas>
     <div id="tune" class="hide">
       <h4>live tuner</h4>
-      <div class="trow"><label title="circuit to relax">fixture</label><select id="fixture"></select></div>
+      <div class="trow" data-tip="which corpus circuit to relax — switching re-runs the real fdcore.simulate"><label>fixture</label><select id="fixture"></select></div>
       <div class="tsep"></div>
       <div id="sliders"></div>
       <div class="tsep"></div>
-      <div class="trow"><button id="reset">reset defaults</button><span id="tstat"></span></div>
+      <div class="trow"><button id="reset" data-tip="restore every gain to DEFAULT_GAINS and re-run">reset defaults</button><span id="tstat"></span></div>
     </div>
     <div id="drop">drop a <b>graph.json</b> here (or use “Load JSON”)<br>
       <span style="font-size:11px">generate with: <code>scripts/dump_layout_graph.py &lt;fixture&gt; --trace --out dev/layout-sim/graph.json</code></span></div>
     <div class="legend">
       <div><i style="background:var(--rail)"></i>rail&nbsp; <i style="background:var(--gnd)"></i>gnd&nbsp; <i style="background:var(--sig)"></i>signal</div>
     </div>
+    </div><!-- /#simpane -->
+    <div id="renderpane">
+      <div class="cap"><b>KiCad output</b> — final placed + routed (kicad-cli)</div>
+      <div id="rbox"><div id="rstat">drag a knob to render…</div><img id="rimg" alt="KiCad render of the settled layout"></div>
+    </div>
   </div>
 </div>
+<div id="tip"></div>
 <script>
 const cv = document.getElementById('cv'), ctx = cv.getContext('2d');
 const $ = id => document.getElementById(id);
@@ -247,12 +276,15 @@ const RANGES = {
   iters:[100,1500,50], margin:[0,6,0.254],
 };
 const TIP = {
-  repel_aniso:'axis bias for overlap resolution — >1 makes horizontal separation cheaper, so same-net clusters fan into a row',
-  attract:'star pull of each pin toward its net centroid',
-  repel:'AABB-overlap push between bodies (per mm)',
-  gravity_rail:'upward drift on rail-touching parts', gravity_gnd:'downward drift on ground-touching parts',
-  flow:'left→right bias by role (input←, output→)', side:'barrier pushing supports past their IC edge',
-  iters:'relaxation steps', margin:'symbol_overlap gate margin (mm)',
+  attract:'star attraction — how hard each pin is pulled toward its net centroid (the wirelength / rail-proximity gradient). ↑ = tighter clusters, shorter wires',
+  repel:'overlap repulsion — push between two non-IC bodies per mm of AABB penetration (the symbol_overlap-gate gradient). ↑ = more spread, fewer overlaps',
+  repel_aniso:'axis bias for resolving an overlap — 1.0 = pure least-penetration (isotropic); >1 makes horizontal separation cheaper, so collapsed same-net clusters (cap banks, parallel shunts) fan into a row instead of a column',
+  gravity_rail:'constant upward drift on parts touching a rail/power net (lifts supplies above the IC)',
+  gravity_gnd:'constant downward drift on parts touching ground (drops returns below the IC)',
+  flow:'constant left→right bias by part role (inputs drift ←, outputs →) — the flow metric, as a gentle field',
+  side:'one-sided barrier pushing each support past its assigned IC edge (uses real pin data; overrides flow for that part)',
+  iters:'number of damped-Euler relaxation steps run before the layout is read out',
+  margin:'keep-out gap (mm) around each body for the symbol_overlap gate — the clearance repulsion tries to maintain',
 };
 let DEFAULTS=null, traceTimer=0;
 const fmt=(k,v)=> k==='iters' ? String(v|0) : (+v).toFixed(2);
@@ -267,7 +299,8 @@ function buildPanel(def){
   for(const [k,v] of items){
     const [mn,mx,st]=RANGES[k]||[0,Math.max(2,(+v)*3),0.05];
     const row=document.createElement('div'); row.className='trow'+(k==='repel_aniso'?' star':'');
-    row.innerHTML=`<label title="${(TIP[k]||'').replace(/"/g,'&quot;')}">${k}</label>`
+    if(TIP[k]) row.dataset.tip=TIP[k];   // whole-row tooltip so hovering the slider explains it too
+    row.innerHTML=`<label>${k}</label>`
       +`<input type="range" min="${mn}" max="${mx}" step="${st}" value="${v}" data-key="${k}">`
       +`<span class="val">${fmt(k,v)}</span>`;
     const inp=row.querySelector('input'), val=row.querySelector('.val');
@@ -279,18 +312,61 @@ function buildPanel(def){
     const d=k==='iters'?def.iters:k==='margin'?def.margin:def.gains[k];
     inp.value=d; inp.nextElementSibling.textContent=fmt(k,d); } requestTrace(); };
   $('tune').classList.remove('hide');
+  document.body.classList.add('live');   // reveal the KiCad-render pane (server mode only)
   requestTrace();
 }
 function scheduleTrace(){ clearTimeout(traceTimer); traceTimer=setTimeout(requestTrace,250); }
-function requestTrace(){
+function tuneParams(){  // fixture + every slider, shared by /api/trace and /api/render
   const p=new URLSearchParams(); p.set('fixture',$('fixture').value);
   for(const inp of $('sliders').querySelectorAll('input')) p.set(inp.dataset.key,inp.value);
+  return p;
+}
+let traceSeq=0;
+function requestTrace(){
+  const seq=++traceSeq;   // drop stale responses: a slow trace must not clobber a newer one
   const st=$('tstat'); st.className=''; st.textContent='computing…';
-  fetch('/api/trace?'+p).then(r=>r.json()).then(d=>{
+  fetch('/api/trace?'+tuneParams()).then(r=>r.json()).then(d=>{
+    if(seq!==traceSeq) return;
     if(d.error){ st.className='err'; st.textContent=d.error; return; }
     setData(d); st.textContent='';
-  }).catch(()=>{ st.className='err'; st.textContent='request failed'; });
+    scheduleRender();   // pair the animation with the real KiCad output
+  }).catch(()=>{ if(seq!==traceSeq) return; st.className='err'; st.textContent='request failed'; });
 }
+
+// --- KiCad-render pane: the actual placed+routed PNG for the current gains ----
+// kicad-cli render is ~0.4 s, so debounce after the trace settles and abort any
+// in-flight render when the knobs move again (stale responses are dropped).
+let renderTimer=0, renderAbort=null, lastObjURL=null;
+function scheduleRender(){ clearTimeout(renderTimer); renderTimer=setTimeout(requestRender,400); }
+function requestRender(){
+  if(renderAbort) renderAbort.abort();
+  renderAbort=new AbortController();
+  const rs=$('rstat'); rs.className=''; rs.textContent='rendering KiCad output…';
+  fetch('/api/render?'+tuneParams(),{signal:renderAbort.signal})
+    .then(async r=>{ if(!r.ok){ const j=await r.json().catch(()=>({})); throw new Error(j.error||('HTTP '+r.status)); } return r.blob(); })
+    .then(b=>{ const url=URL.createObjectURL(b), img=$('rimg');
+      img.onload=()=>{ if(lastObjURL) URL.revokeObjectURL(lastObjURL); lastObjURL=url; };
+      img.src=url; img.style.display='block'; $('rstat').textContent=''; })
+    .catch(e=>{ if(e.name==='AbortError') return;
+      const rs=$('rstat'); rs.className='err'; rs.textContent='render failed: '+e.message; });
+}
+
+// --- instant tooltips (data-tip) — native title= renders unreliably ----------
+const tipEl=$('tip'); let curTip=null;
+function showTip(text,el){ tipEl.textContent=text;
+  const r=el.getBoundingClientRect(), tw=tipEl.offsetWidth, th=tipEl.offsetHeight;
+  let x=r.left, y=r.bottom+6;
+  if(x+tw>innerWidth-8) x=innerWidth-8-tw; if(x<8) x=8;
+  if(y+th>innerHeight-8) y=r.top-th-6;          // flip above when no room below
+  tipEl.style.left=x+'px'; tipEl.style.top=y+'px'; tipEl.classList.add('show'); }
+function hideTip(){ tipEl.classList.remove('show'); }
+document.addEventListener('mouseover',e=>{
+  const el=e.target.closest?e.target.closest('[data-tip]'):null;
+  if(el===curTip) return; curTip=el;
+  const t=el&&el.getAttribute('data-tip');
+  if(t) showTip(t,el); else hideTip();
+});
+document.addEventListener('mouseout',e=>{ if(!e.relatedTarget){ curTip=null; hideTip(); } });
 
 // Server mode → build the tuner. Otherwise fall back to graph.json / the picker.
 fetch('/api/defaults').then(r=>r.ok?r.json():Promise.reject()).then(buildPanel)

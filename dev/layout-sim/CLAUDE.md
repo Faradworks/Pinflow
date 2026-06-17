@@ -13,7 +13,7 @@ This dir (`dev/layout-sim/`) is the debug viewer. The engine itself lives under 
 | `services/api/pinflow_api/emit/fdcore.py` | **The physics.** Pure, no `kicad_sch_api`. `simulate(nodes, edges, cfg)`. Single source of truth — the placer AND this viewer run the same `simulate`. |
 | `services/api/pinflow_api/emit/placers/fdplace.py` | The placer. Mirrors `cplace._build_once`'s scaffold, swaps the constraint solve for `fdcore.simulate`, then snaps + labels, then reuses cplace's router/serialize. `trace_layout()` produces this viewer's JSON. |
 | `services/api/scripts/dump_layout_graph.py` | `--trace` runs the real sim and dumps `{graph, frames, snapped}`. |
-| `dev/layout-sim/index.html` | Canvas playback (scrubber, gate-box overlay, show-snapped). Pure rendering — no JS physics. |
+| `dev/layout-sim/index.html` | Canvas playback (scrubber, gate-box overlay, show-snapped) on the left; in `--serve` mode a split pane on the right shows the **real kicad-cli render** of the settled layout (auto-refreshed per gain change via `/api/render`). Pure rendering — no JS physics. |
 | `dev/layout-sim/graph.json` | Generated trace (gitignore-able; regenerate any time). |
 
 Modified production files (small): `cplace.py` (extracted `_horiz_refs`, shared), `placers/__init__.py`
@@ -39,6 +39,9 @@ Modified production files (small): `cplace.py` (extracted `_horiz_refs`, shared)
 ## Run it
 
 ```bash
+# viewer + live tuner, one shot, from any cwd (no venv activation / cd needed):
+./dev/layout-sim/serve.sh                 # → http://127.0.0.1:8777  (--port N to override)
+
 cd services/api
 # scoreboard
 .venv/bin/python scripts/eval_layout.py --manifest tests/fixtures/generated_corpus.json --placer fdplace
@@ -59,7 +62,11 @@ cd ../../dev/layout-sim && python3 -m http.server 8777      # → http://localho
 The live tuner (`--serve`) adds an `/api/trace` endpoint the viewer's gain sliders
 hit on every change; the server runs `fdplace.trace_layout` with the requested
 gains and the page re-animates. No JS physics — the single-source-of-truth rule
-holds. This is how `repel_aniso` was tuned.
+holds. This is how `repel_aniso` was tuned. A second endpoint, `/api/render`, runs
+the *full* placer (`fdplace` → snap → route → label) and rasterises the emitted
+`.kicad_sch` via `kicad-cli` (`emit/render.py`), so the right-hand pane shows what
+KiCad actually draws for the current gains — debounced after the trace and aborted
+when a knob moves again.
 
 Golden netlist fixtures (`tests/fixtures/golden/*.netlist.json`) are gitignored/derived; regenerate
 with `scripts/sch_to_netlist.py <golden>.kicad_sch` if missing (or run `check_all.py`).

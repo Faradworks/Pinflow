@@ -58,6 +58,59 @@ def _resolve_fixture(arg: str) -> Path:
         f"fixture not found: {arg!r} (looked in {_FIX}/generated and /golden)")
 
 
+# ksa's symbol cache is a process-global index keyed by library *stem*, and
+# several goldens ship a sidecar lib whose stem collides with a bundled KiCad
+# lib (a custom `Regulator_Switching`/`Device`/`power`). In a long-lived server
+# that switches fixtures, discovering one fixture's sidecar would shadow the
+# bundled lib of the same name for *later* fixtures — e.g. after mt3608's custom
+# `Regulator_Switching`, buck_tps62840 can no longer resolve the bundled
+# `Regulator_Switching:TPS628436DRL`. So we snapshot the clean bundled baseline
+# once and restore it before each request's sidecar discovery. (eval_layout
+# never hits this: it runs each corpus in a fresh process.)
+_SYM_BASELINE: tuple[dict, set] | None = None
+
+
+def _snapshot_symbol_baseline() -> None:
+    """Capture the cache's clean (bundled-only) library index for the server to
+    reset to per request. Best-effort: on any ksa-internals mismatch we leave
+    the baseline unset and fall back to plain additive discovery."""
+    global _SYM_BASELINE
+    cache = ksa.get_symbol_cache()
+    try:
+        cache.discover_libraries()                  # index bundled/system libs
+        cache._enable_persistence = False           # don't leak sidecars to disk
+        _SYM_BASELINE = (dict(cache._library_index), set(cache._library_paths))
+    except Exception as e:  # noqa: BLE001
+        _SYM_BASELINE = None
+        print(f"warning: symbol baseline unavailable ({e}); fixtures with "
+              f"custom libs may shadow each other", file=sys.stderr)
+
+
+def _register_symbols(fixture_path: Path) -> None:
+    """Make the current fixture's symbols resolvable: reset the cache to the
+    bundled baseline (dropping a previous fixture's sidecar), then register this
+    fixture's sidecar `<name>.netlist.symbols/` dir. The hand-drawn goldens carry
+    project-local libs (e.g. `RKL-DcDcConverters` for tps61088); without the
+    sidecar, `fdplace`'s `components.add` raises PlacerError on the first
+    non-stock symbol. Mirrors `eval_layout._discover` plus the per-request
+    isolation a persistent server needs."""
+    cache = ksa.get_symbol_cache()
+    if _SYM_BASELINE is not None:        # server: undo the prior fixture's sidecar
+        idx, paths = _SYM_BASELINE
+        try:
+            cache._library_index.clear(); cache._library_index.update(idx)
+            cache._library_paths.clear(); cache._library_paths.update(paths)
+            cache.clear_cache()          # resolved-symbol cache may hold a shadow
+        except Exception:  # noqa: BLE001
+            pass
+    sidecar = fixture_path.with_suffix(".symbols")  # <name>.netlist.json -> .symbols
+    if sidecar.is_dir():
+        try:
+            cache.discover_libraries([str(sidecar)])
+        except Exception as e:  # noqa: BLE001
+            print(f"warning: could not register {sidecar}: {e}", file=sys.stderr)
+
+
 def _axis_snap(dx: float, dy: float) -> tuple[float, float]:
     """Snap a facing vector to the nearest axis — wires are orthogonal."""
     if abs(dx) >= abs(dy):
@@ -173,16 +226,18 @@ def _list_fixtures() -> list[str]:
     return sorted(names)
 
 
-def _trace_payload(query: dict[str, list[str]]) -> dict:
-    """Build a `SimConfig` from query params (any DEFAULT_GAINS key, plus
-    `iters`/`margin`) and return the viewer trace for `?fixture=`."""
+def _netlist_and_cfg(query: dict[str, list[str]]):
+    """Resolve `?fixture=` to a `Netlist` and build a `SimConfig` from the query
+    params (any DEFAULT_GAINS key, plus `iters`/`margin`). Shared by the trace
+    and render endpoints so the animation and the rendered PNG describe the
+    *same* solved layout. Returns `(netlist, cfg, name)`."""
     from pinflow_api.emit import fdcore
-    from pinflow_api.emit.placers.fdplace import trace_layout
 
     fixture = (query.get("fixture") or [None])[0]
     if not fixture:
         raise ValueError("missing ?fixture=")
     path = _resolve_fixture(fixture)
+    _register_symbols(path)
     netlist = Netlist.model_validate(json.loads(path.read_text()))
 
     gains = dict(fdcore.DEFAULT_GAINS)
@@ -195,7 +250,29 @@ def _trace_payload(query: dict[str, list[str]]) -> dict:
     cfg = fdcore.SimConfig(gains=gains, iters=iters, margin=margin)
 
     name = path.stem.replace(".netlist", "")
+    return netlist, cfg, name
+
+
+def _trace_payload(query: dict[str, list[str]]) -> dict:
+    """Run the real force sim for `?fixture=` and return the viewer trace."""
+    from pinflow_api.emit.placers.fdplace import trace_layout
+
+    netlist, cfg, name = _netlist_and_cfg(query)
     return trace_layout(netlist, title=name, cfg=cfg)
+
+
+def _render_png(query: dict[str, list[str]]) -> bytes:
+    """Run the *full* placer (`fdplace`: force-solve → snap → route → label) for
+    `?fixture=` and rasterise the emitted `.kicad_sch` to PNG via `kicad-cli`.
+    This is what KiCad would actually show — the trace's `snapped` view is just
+    part origins; this is the placed-and-routed schematic the viewer pairs with
+    the animation."""
+    from pinflow_api.emit.placers.fdplace import fdplace
+    from pinflow_api.emit.render import render_schematic_bytes
+
+    netlist, cfg, name = _netlist_and_cfg(query)
+    result = fdplace(netlist, title=name, cfg=cfg)
+    return render_schematic_bytes(result.sch_text, white_background=True, dpi=150)
 
 
 def _serve(port: int) -> None:
@@ -205,6 +282,7 @@ def _serve(port: int) -> None:
     from pinflow_api.emit import fdcore
 
     viewer = str(_VIEWER)
+    _snapshot_symbol_baseline()   # clean bundled baseline; restored per request
 
     class Handler(SimpleHTTPRequestHandler):
         def __init__(self, *a, **kw):
@@ -218,6 +296,14 @@ def _serve(port: int) -> None:
             self.send_header("Cache-Control", "no-store")
             self.end_headers()
             self.wfile.write(body)
+
+        def _send_png(self, png: bytes) -> None:
+            self.send_response(200)
+            self.send_header("Content-Type", "image/png")
+            self.send_header("Content-Length", str(len(png)))
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
+            self.wfile.write(png)
 
         def do_GET(self):  # noqa: N802
             u = urlparse(self.path)
@@ -233,6 +319,12 @@ def _serve(port: int) -> None:
                 try:
                     return self._send_json(200,
                                            _trace_payload(parse_qs(u.query)))
+                except Exception as e:  # noqa: BLE001
+                    return self._send_json(400,
+                                           {"error": f"{type(e).__name__}: {e}"})
+            if u.path == "/api/render":
+                try:
+                    return self._send_png(_render_png(parse_qs(u.query)))
                 except Exception as e:  # noqa: BLE001
                     return self._send_json(400,
                                            {"error": f"{type(e).__name__}: {e}"})
@@ -277,6 +369,7 @@ def main() -> None:
         path = _resolve_fixture(args.fixture)
     except FileNotFoundError as e:
         sys.exit(str(e))
+    _register_symbols(path)
     netlist = Netlist.model_validate(json.loads(path.read_text()))
     errs = netlist.validate_self()
     if errs:

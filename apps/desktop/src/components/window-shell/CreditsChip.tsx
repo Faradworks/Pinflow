@@ -78,7 +78,7 @@ export function CreditsChip({ refreshKey }: { refreshKey: number }) {
         type="button"
         disabled={signingIn}
         onClick={signIn}
-        title="Sign in to Pinflow Cloud"
+        title="Sign in to Pinflow Cloud — unlocks part search across millions of orderable JLCPCB/LCSC parts"
         style={{
           ...chipStyle,
           borderColor: "var(--accent)",

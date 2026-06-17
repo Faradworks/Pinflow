@@ -36,9 +36,9 @@ export function PartsSignInCard({
         </span>
       </div>
       <div style={{ fontSize: 12.5, color: "var(--muted)", lineHeight: 1.5 }}>
-        Sign in (free, no card) to turn on automatic part search and datasheet
-        lookup — or just paste the MPN / attach the datasheet and I'll continue.
-        Your own API key still runs the model.
+        Sign in (free, no card) to search millions of orderable JLCPCB/LCSC parts
+        and pull datasheets automatically — or just paste the MPN / attach the
+        datasheet and I'll continue. Your own API key still runs the model.
       </div>
 
       {phase === "done" ? (

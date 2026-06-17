@@ -238,6 +238,58 @@ def _snap_groups(pos: dict[str, tuple[float, float]], tree: LayoutTree,
             for i, r in enumerate(caps):
                 pos[r] = (mx, start + i * pitch)
         handled.update(caps)
+
+    # Inter-group column de-collision (post-pass). The snaps above pack each
+    # group onto its own column but never check whether two GROUPS landed on
+    # the same x — e.g. a single-member rail cap (skipped by the `len < 2`
+    # guard, so never `handled`) and a shunt/divider column grid-snap onto one
+    # another and overlap (the diode-on-cap the renders show). Mirroring
+    # cplace's outward column allocation, push each movable chain column
+    # OUTWARD past every occupied x-interval on its IC side. The whole column
+    # shifts as one `dx`, so its internal x-spread — and the chain_coherence it
+    # earns — is untouched; outward-only keeps it clear of the IC and the
+    # dense-IC staircase. No collision → `dx = 0` → inert.
+    if anchor in parts:
+        ic_x = parts[anchor].origin[0]
+
+        def _mem(g):
+            return [r for r in g.members if r in pos and r in parts]
+
+        def _colx(ms):
+            return median([pos[r][0] for r in ms])
+
+        def _hw(r):
+            return max(parts[r].leftext, parts[r].rightext)
+
+        movable = [g for g in tree.groups
+                   if g.archetype in (Archetype.SHUNT_BRANCH,
+                                      Archetype.DIVIDER_STACK) and _mem(g)]
+        movable_refs = {r for g in movable for r in _mem(g)}
+        # Seed occupied intervals from every non-movable placed part — NOT just
+        # `handled`, since single-member cap banks occupy a column too.
+        occ: dict[str, list[tuple[float, float]]] = {"L": [], "R": []}
+        for r, (x, _y) in pos.items():
+            if r == anchor or r in movable_refs or r not in parts:
+                continue
+            occ["R" if x >= ic_x else "L"].append((x - _hw(r), x + _hw(r)))
+        for side in ("L", "R"):
+            step = COL_GAP if side == "R" else -COL_GAP
+            gs = [g for g in movable
+                  if ("R" if _colx(_mem(g)) >= ic_x else "L") == side]
+            gs.sort(key=lambda g: (abs(_colx(_mem(g)) - ic_x),
+                                   tuple(sorted(_mem(g)))))
+            for g in gs:
+                ms = _mem(g)
+                cx0 = _colx(ms)
+                cx = cx0
+                hw = max(_hw(r) for r in ms)
+                while any(not (cx + hw <= o0 or o1 <= cx - hw)
+                          for o0, o1 in occ[side]):
+                    cx += step
+                if cx != cx0:
+                    for r in ms:
+                        pos[r] = (pos[r][0] + (cx - cx0), pos[r][1])
+                occ[side].append((cx - hw, cx + hw))
     return handled
 
 

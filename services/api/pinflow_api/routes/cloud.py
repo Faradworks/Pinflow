@@ -39,6 +39,14 @@ async def credits():
     try:
         async with httpx.AsyncClient(timeout=15) as c:
             r = await c.get(f"{gw}/v1/credits", headers=h)
+        if r.status_code == 401:
+            # The token (and its refresh token) is dead — a stale in-memory
+            # session. Clear it so the chip flips to signed-out and prompts a
+            # re-auth, instead of reporting signed_in:true off a zombie session.
+            # This probe runs on mount/focus, so expiry surfaces here before the
+            # user spends a prompt and hits the same 401 in the agent loop.
+            cloud_session.logout()
+            return {"signed_in": False, "configured": True}
         if r.status_code != 200:
             return {"signed_in": True, "configured": True, "error": f"gateway {r.status_code}"}
         d = r.json()

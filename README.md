@@ -63,6 +63,29 @@ Optionally, **Pinflow Cloud** is a hosted, managed-key + parts-catalogue add-on
 you can sign into from within the app — but it's just a convenience on top of
 the open-source app.
 
+## Installing on macOS
+
+> **Heads-up:** Pinflow isn't notarized by Apple yet (our Apple Developer
+> account is in progress). The app is ad-hoc signed, so it runs fine — but
+> because macOS can't verify the developer, the **first** launch needs one extra
+> click. This is temporary; a notarized build will remove this step entirely.
+
+After dragging **Pinflow** to Applications, do one of the following on first launch:
+
+- **Right-click → Open.** In Finder, right-click (or Control-click) `Pinflow.app`,
+  choose **Open**, then **Open** again in the dialog. macOS remembers your choice,
+  so every launch after that is a normal double-click.
+- **Or, from Terminal**, clear the download quarantine flag:
+
+  ```bash
+  xattr -dr com.apple.quarantine /Applications/Pinflow.app
+  ```
+
+If you ever see **"Pinflow is damaged and can't be opened"** with only a *Move to
+Trash* button, the download was corrupted or partially extracted — re-download
+the `.dmg` and try the steps above. (The app itself is not damaged; that wording
+is Gatekeeper's generic message for an app it can't validate.)
+
 ## Integrations
 
 - **KiCad** — reads your open project and stages schematic edits you review

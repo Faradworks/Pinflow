@@ -36,7 +36,12 @@ from kicad_sch_api.core.component_bounds import get_component_bounding_box
 
 from pinflow_api.builders._common import sch_to_string
 from pinflow_api.emit import bbox
-from pinflow_api.emit.route import count_crossings, count_overlaps, route_nets
+from pinflow_api.emit.route import (
+    _interior,
+    count_crossings,
+    count_overlaps,
+    route_nets,
+)
 from pinflow_api.emit.classify import LayoutPlan, NetKind, Role, classify
 from pinflow_api.emit.netlist import Netlist, NetlistNet, NetlistPart
 
@@ -1025,6 +1030,33 @@ def _away_dir(comp, pin_xy: tuple[float, float]) -> str:
     return "D" if dy > 0 else "U"  # KiCad schematic Y grows downward
 
 
+# A GND-symbol drop whose end (or its drop wire) lands on a pin closer than this
+# is treated as landing *on* that pin. Pins and the GND_STUB drop share the grid
+# and the same `_pin_xy` transform, so a genuine coincidence is exact to well
+# under this; the nearest distinct grid node is 1.27 mm away, so it never false-
+# positives on a merely-adjacent pin.
+_GND_PIN_EPS = 1e-3
+
+
+def _drop_hits_foreign(
+    pin_xy: tuple[float, float],
+    sym_xy: tuple[float, float],
+    foreign: list[tuple[float, float]],
+) -> bool:
+    """True if a GND drop (pin → symbol) shorts a foreign net — i.e. the symbol
+    lands on a foreign-net pin, or the drop wire passes over one. `foreign` is
+    every pin *not* on the dropping net, so a same-net coincidence (harmless) is
+    never flagged. Guards the generalisation of the side-pin step-out below."""
+    seg = (pin_xy, sym_xy)
+    for q in foreign:
+        if (abs(sym_xy[0] - q[0]) < _GND_PIN_EPS
+                and abs(sym_xy[1] - q[1]) < _GND_PIN_EPS):
+            return True
+        if _interior(q, seg):
+            return True
+    return False
+
+
 def _net_alias_map(
     netlist: Netlist, plan: LayoutPlan
 ) -> dict[str, str]:
@@ -1413,6 +1445,17 @@ def _place_connectivity(
             # is wired into one short chain dropping to a *single* power:GND
             # symbol, rather than one cramped symbol per pin. Same-named
             # symbols still connect the clusters by net name.
+            #
+            # `foreign` = every placed pin not on this ground net (`all_pins`
+            # is complete here — built in the first pass above). A symbol drop
+            # landing on one of these silently shorts the two nets; the drop
+            # direction below steps clear of any such pin.
+            own = [rec[2] for rec in pts]
+            foreign = [
+                q for q in all_pins
+                if not any(abs(q[0] - o[0]) < _GND_PIN_EPS
+                           and abs(q[1] - o[1]) < _GND_PIN_EPS for o in own)
+            ]
             per_part: dict[str, list] = {}
             for rec in pts:
                 per_part.setdefault(rec[0], []).append(rec)
@@ -1425,16 +1468,35 @@ def _place_connectivity(
                             issues.append(f"ground link {a[0]}.{a[1]}: {e}")
                     ref, pin, xy, comp = cluster[-1]
                     # A straight drop (xy[1] + GND_STUB) lands the symbol one
-                    # pin-pitch below the pin — fine for a passive's downward
-                    # pin, but for a side-facing IC ground pin that is exactly
-                    # the *neighbouring* pin, which silently shorts the two
-                    # nets. Step out along the pin's away direction instead so
-                    # a side pin's symbol clears the pin column.
+                    # pin-pitch below the pin — fine when that spot is empty,
+                    # but if a foreign pin sits there (a side IC pin's
+                    # neighbour, or a part stacked one stub below) the drop
+                    # silently shorts the two nets. Pick the first drop
+                    # direction that clears every foreign pin. The default —
+                    # side pins step out along `away`, others drop down — is
+                    # tried first, so a well-spaced layout (e.g. every cplace
+                    # golden) reproduces the prior geometry exactly; only a
+                    # real collision falls through to the alternatives.
                     away = _away_dir(comp, xy)
-                    if away in ("L", "R"):
-                        sym_xy = (xy[0] + _DIR_VEC[away][0] * GND_STUB, xy[1])
-                    else:
-                        sym_xy = (xy[0], xy[1] + GND_STUB)
+                    primary = away if away in ("L", "R") else "D"
+                    sym_xy = None
+                    for d in (primary, *(o for o in ("D", "L", "R", "U")
+                                         if o != primary)):
+                        cand = (xy[0] + _DIR_VEC[d][0] * GND_STUB,
+                                xy[1] + _DIR_VEC[d][1] * GND_STUB)
+                        if not _drop_hits_foreign(xy, cand, foreign):
+                            sym_xy = cand
+                            break
+                    if sym_xy is None:
+                        # Nothing clear one stub out — a double-length stub in
+                        # the default direction clears a pin exactly one pitch
+                        # away; else give up to the default (no worse than
+                        # before, and the connectivity gate still catches it).
+                        lng = (xy[0] + _DIR_VEC[primary][0] * 2 * GND_STUB,
+                               xy[1] + _DIR_VEC[primary][1] * 2 * GND_STUB)
+                        sym_xy = lng if not _drop_hits_foreign(xy, lng, foreign) \
+                            else (xy[0] + _DIR_VEC[primary][0] * GND_STUB,
+                                  xy[1] + _DIR_VEC[primary][1] * GND_STUB)
                     try:
                         sch.components.add(
                             lib_id=lib_id, reference=f"#PWR{pwr_n:03d}",

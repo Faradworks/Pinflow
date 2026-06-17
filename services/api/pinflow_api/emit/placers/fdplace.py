@@ -33,6 +33,7 @@ from pinflow_api.emit.netlist_to_sch import (
     _place_connectivity,
     _place_no_connects,
     _rewrite_property_at,
+    _side_from_contacts,
     _snap,
     _topology_intact,
     place,
@@ -85,6 +86,27 @@ def _net_kind(nc) -> str:
     return "signal"
 
 
+# Role default when a part has no non-ground IC contact to read a side from —
+# mirrors the legacy column placer's role_fallback (netlist_to_sch). Roles not
+# listed (DECOUPLING_CAP, PULL_RESISTOR, UNKNOWN) get no bias.
+_SIDE_FALLBACK = {
+    "INPUT_CAP": "L", "CONFIG_CAP": "L", "SERIES_ELEMENT": "L", "CONNECTOR": "L",
+    "OUTPUT_CAP": "R", "DIVIDER_RESISTOR": "R",
+}
+
+
+def _target_side(plan, ref: str, role_name: str | None, anchor: str) -> str | None:
+    """Folded IC side (L/R) a support part should settle on: the modal side of
+    the IC pins its non-ground nets reach, else a role default. T/B fold to
+    L/R (corpus ICs are horizontal). None ⇒ no side bias."""
+    raw = _side_from_contacts(plan, ref, anchor)
+    if raw is None:
+        raw = _SIDE_FALLBACK.get(role_name or "")
+    if raw is None:
+        return None
+    return "L" if raw in ("L", "T") else "R"
+
+
 def _build_graph(parts: dict[str, _Part], tree: LayoutTree, netlist: Netlist,
                  anchor: str) -> tuple[list[fdcore.Node], list[fdcore.Edge]]:
     plan = tree.plan
@@ -94,6 +116,7 @@ def _build_graph(parts: dict[str, _Part], tree: LayoutTree, netlist: Netlist,
         pins = [fdcore.Pin(num, off[0], off[1], *_facing(off))
                 for num, off in sorted(p.pin_off.items())]
         role = plan.parts[ref].role if ref in plan.parts else None
+        role_name = role.name if role is not None else None
         nodes.append(fdcore.Node(
             ref=ref,
             # symmetric half-extents centred on the origin; max() of the two
@@ -102,7 +125,9 @@ def _build_graph(parts: dict[str, _Part], tree: LayoutTree, netlist: Netlist,
             hy=max(p.topext, p.botext),
             pins=pins,
             is_ic=(ref == anchor),
-            role=(role.name if role is not None else None),
+            role=role_name,
+            side=(None if ref == anchor
+                  else _target_side(plan, ref, role_name, anchor)),
             pinned=(ref == anchor),
             x=p.origin[0],
             y=p.origin[1],
@@ -244,11 +269,34 @@ def _align_snap(pos: dict[str, tuple[float, float]], anchor: str,
 
 
 def _finalize_positions(result: fdcore.SimResult, tree: LayoutTree,
-                        parts: dict[str, _Part],
-                        anchor: str) -> dict[str, tuple[float, float]]:
+                        parts: dict[str, _Part], anchor: str,
+                        nodes: list[fdcore.Node],
+                        margin: float) -> dict[str, tuple[float, float]]:
     """Settled force positions → final, grid-snapped, coincidence-free origins.
-    Order is load-bearing: group snap → prefix align → grid snap → anti-stack."""
+    Order is load-bearing: side clamp → group snap → prefix align → grid snap →
+    anti-stack."""
     pos = {ref: result.positions[ref] for ref in result.positions}
+
+    # Side-assignment safety clamp: the force usually settles each part on its
+    # assigned IC side, but pull any straggler back to the side boundary (X
+    # only, row preserved) so it can't re-introduce an IC-spanning net. Runs
+    # before group-snap (which re-tightens a corrected member into its group)
+    # and anti-stack (which de-collides). A no-op when the force did its job.
+    side_by_ref = {n.ref: n.side for n in nodes}
+    if anchor in parts:
+        a = parts[anchor]
+        ic_left, ic_right = a.origin[0] - a.leftext, a.origin[0] + a.rightext
+        for ref in pos:
+            side = side_by_ref.get(ref)
+            if ref == anchor or side is None:
+                continue
+            x, y = pos[ref]
+            hw = max(parts[ref].leftext, parts[ref].rightext)
+            if side == "R" and x < ic_right + margin + hw:
+                pos[ref] = (ic_right + margin + hw, y)
+            elif side == "L" and x > ic_left - margin - hw:
+                pos[ref] = (ic_left - margin - hw, y)
+
     handled = _snap_groups(pos, tree, parts, anchor)
     _align_snap(pos, anchor, handled)
 
@@ -260,20 +308,29 @@ def _finalize_positions(result: fdcore.SimResult, tree: LayoutTree,
         x, y = pos[ref]
         pos[ref] = (round(x / _GRID) * _GRID, round(y / _GRID) * _GRID)
 
-    # Anti-stack (ported from cplace): two parts must never share an origin —
-    # coincident pins silently merge nets and fail the topology check. Stagger
-    # duplicates deterministically.
+    # Anti-stack: no two parts' PINS may share a coordinate — a coincident pin
+    # silently merges the two nets and fails the topology check (it survives
+    # even the label-only fallback, since a pin landing on a pin connects them
+    # regardless of labels). Origin-uniqueness isn't enough: the side bias packs
+    # same-side parts into a column where distinct origins can still collide
+    # pins. Stagger each part down by COL_GAP until none of its pins land on an
+    # already-occupied pin. Deterministic (natural-key order).
+    def _pin_coords(ref: str, ox: float, oy: float) -> set[tuple[float, float]]:
+        return {(round(ox + dx, 2), round(oy + dy, 2))
+                for dx, dy in parts[ref].pin_off.values()}
+
     taken: set[tuple[float, float]] = set()
     if anchor in parts:
-        a = parts[anchor]
-        taken.add((round(a.origin[0], 2), round(a.origin[1], 2)))
+        taken |= _pin_coords(anchor, *parts[anchor].origin)
     for ref in sorted(pos, key=_natural_key):
         if ref == anchor:
             continue
         x, y = pos[ref]
-        while (round(x, 2), round(y, 2)) in taken:
+        pc = _pin_coords(ref, x, y)
+        while pc & taken:
             y += COL_GAP
-        taken.add((round(x, 2), round(y, 2)))
+            pc = _pin_coords(ref, x, y)
+        taken |= pc
         pos[ref] = (x, y)
     return pos
 
@@ -406,7 +463,8 @@ def _build_once(netlist: Netlist, tree: LayoutTree, title: str, wiring: str,
 
     # ---- the seam: force solve replaces cplace's emit + solve ----
     result = fdcore.simulate(nodes, edges, cfg)
-    positions = _finalize_positions(result, tree, parts, anchor)
+    positions = _finalize_positions(result, tree, parts, anchor, nodes,
+                                    cfg.margin)
 
     for ref in sorted(parts, key=_natural_key):
         p = parts[ref]
@@ -477,7 +535,8 @@ def trace_layout(netlist: Netlist, *, title: str = "Subcircuit",
 
     _, _, _, parts, nodes, edges = _prepare(netlist, tree, title)
     result = fdcore.simulate(nodes, edges, cfg)
-    snapped = _finalize_positions(result, tree, parts, tree.anchor)
+    snapped = _finalize_positions(result, tree, parts, tree.anchor, nodes,
+                                  cfg.margin)
 
     return {
         "name": title,

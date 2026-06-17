@@ -62,6 +62,7 @@ class Node:
     pins: list[Pin]
     is_ic: bool
     role: str | None = None      # Role.name (e.g. "INPUT_CAP") or None
+    side: str | None = None      # target IC edge "L"/"R" (folded) or None (no bias)
     pinned: bool = False
     x: float = 0.0
     y: float = 0.0
@@ -84,6 +85,8 @@ DEFAULT_GAINS: dict[str, float] = {
     "gravity_rail": 0.5,  # constant upward bias on rail-touching parts
     "gravity_gnd": 0.5,   # constant downward bias on ground-touching parts
     "flow": 0.5,          # constant left/right bias by role (input←, output→)
+    "side": 1.5,          # one-sided barrier pushing each support past its IC
+                          # side edge (real pin data; supersedes `flow` per node)
 }
 
 
@@ -109,6 +112,8 @@ class SimResult:
 # --- constants ---------------------------------------------------------------
 
 _A_SAT = 25.4        # attraction saturation (10 grid) — force magnitude ceiling
+_SIDE_SAT = 12.7     # side-bias saturation (5 grid) — kept below `_A_SAT` so the
+                     # side barrier never out-pulls attraction's row alignment
 _DAMP = 0.85         # velocity damping per iteration
 _VMAX = 5.08         # velocity clamp (2 grid / iter), scaled by the cooling term
 _FLOW_BIAS = {"INPUT_CAP": -1.0, "OUTPUT_CAP": 1.0, "DIVIDER_RESISTOR": 1.0}
@@ -297,9 +302,35 @@ def _fields(nodes, edges, g, fx, fy) -> None:
             fy[n.ref] -= g["gravity_rail"]
         if n.ref in gnd_refs:
             fy[n.ref] += g["gravity_gnd"]
-        bias = _FLOW_BIAS.get(n.role or "", 0.0)
-        if bias:
-            fx[n.ref] += g["flow"] * bias
+        # Role flow bias is the coarse fallback: only for nodes without a
+        # real-pin side. `_side_bias` (real pin data) owns the horizontal
+        # placement of every node that has a side.
+        if n.side is None:
+            bias = _FLOW_BIAS.get(n.role or "", 0.0)
+            if bias:
+                fx[n.ref] += g["flow"] * bias
+
+
+def _side_bias(nodes, g, margin, ic, fx, fy) -> None:
+    """One-sided, x-only barrier pulling each support node past the IC edge on
+    its assigned side. It enforces *which side* only — never touches `fy`, so
+    `_attraction` keeps owning the row (secondary axis) and `_repulsion` fans
+    same-side parts out along it. Once a node clears its edge the force is zero,
+    so it never fights attraction or collapses a side onto one column."""
+    if ic is None:
+        return
+    right, left = ic.x + ic.hx, ic.x - ic.hx
+    for n in nodes:
+        if n.pinned or n.side is None:
+            continue
+        if n.side == "R":
+            e = (right + margin + n.hx) - n.x       # >0 ⇒ node is too far left
+            if e > 0:
+                fx[n.ref] += g["side"] * _sat(e, _SIDE_SAT)
+        else:  # "L"
+            e = (left - margin - n.hx) - n.x        # <0 ⇒ node is too far right
+            if e < 0:
+                fx[n.ref] += g["side"] * _sat(e, _SIDE_SAT)
 
 
 # --- discrete re-orient (v2; inactive when reorient_every == 0) --------------
@@ -381,6 +412,7 @@ def simulate(nodes: list[Node], edges: list[Edge], cfg: SimConfig) -> SimResult:
     by_ref = {n.ref: n for n in nodes}
 
     _init_positions(nodes, edges, by_ref)
+    ic = next((n for n in nodes if n.is_ic and n.pinned), None)
     vx = {n.ref: 0.0 for n in nodes}
     vy = {n.ref: 0.0 for n in nodes}
     frames: list[dict] = []
@@ -392,6 +424,7 @@ def simulate(nodes: list[Node], edges: list[Edge], cfg: SimConfig) -> SimResult:
         _attraction(nodes, edges, by_ref, g, fx, fy)
         _repulsion(nodes, g, cfg.margin, fx, fy)
         _fields(nodes, edges, g, fx, fy)
+        _side_bias(nodes, g, cfg.margin, ic, fx, fy)
 
         cool = max(0.05, 1.0 - it / cfg.iters)
         vmax = _VMAX * cool

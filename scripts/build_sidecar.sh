@@ -64,4 +64,20 @@ rm -rf "$BIN/pinflow-api"
 mkdir -p "$BIN"
 cp -R "$API/dist/pinflow-api" "$BIN/pinflow-api"
 
+# Ad-hoc codesign the staged sidecar on macOS (we don't have an Apple Developer
+# cert yet — `-` is the ad-hoc identity, no account required). Without this, the
+# nested Mach-O files are unsigned: on Apple Silicon the kernel kills the spawned
+# `pinflow-api` launcher and dyld rejects the dlopen'd .so/.dylib files, so the
+# app boots to a dead backend. The launcher must be signed AFTER its nested
+# libraries so the seal covers them. The outer .app is signed separately —
+# `tauri build`/tauri-action via bundle.macOS.signingIdentity "-" in CI, and a
+# `--deep` re-sign in scripts/build_desktop.sh locally. Remove the ad-hoc path
+# (here + that config key) once notarization with a real Developer ID lands.
+if [[ "$(uname -s)" == "Darwin" ]]; then
+  echo "==> ad-hoc codesign the staged sidecar (no Apple Developer cert yet)"
+  find "$BIN/pinflow-api" -type f \( -name '*.so' -o -name '*.dylib' \) \
+    -exec codesign --force --sign - --timestamp=none {} +
+  codesign --force --sign - --timestamp=none "$BIN/pinflow-api/pinflow-api"
+fi
+
 echo "==> sidecar staged at $BIN/pinflow-api"

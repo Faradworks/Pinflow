@@ -17,6 +17,7 @@ import json
 import textwrap
 from typing import Any, Callable, Iterator, Optional
 
+from pinflow_api import cloud_session
 from pinflow_api import cost
 from pinflow_api import llm
 from pinflow_api import staging
@@ -506,6 +507,12 @@ def _friendly_llm_error(e: Exception) -> str:
             "settings (the sliders in the title bar) to top up, then try again."
         )
     if status == 401 and ("expired" in text.lower() or "pinflow" in text.lower()):
+        # A gateway 401 is authoritative: the session (and its refresh token) is
+        # dead. Clear it so the app stops reporting a phantom signed-in state —
+        # otherwise /auth/status and /cloud/credits keep returning signed_in:true
+        # off the stale in-memory session and the user is never prompted to
+        # actually re-auth (they just hit this error again on the next prompt).
+        cloud_session.logout()
         return "Your Pinflow Cloud session expired — open settings and sign in again."
     return f"anthropic error: {e}"
 

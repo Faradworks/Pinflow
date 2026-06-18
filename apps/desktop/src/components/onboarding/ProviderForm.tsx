@@ -50,7 +50,9 @@ const CARDS: {
     mode: "cloud",
     icon: <CloudIcon />,
     title: "Pinflow Cloud",
-    blurb: "Free starter credits, then top up as you go. No API key to manage.",
+    blurb:
+      "Free starter credits, plus part search across millions of orderable " +
+      "JLCPCB/LCSC components. No API key to manage.",
   },
   {
     mode: "self",

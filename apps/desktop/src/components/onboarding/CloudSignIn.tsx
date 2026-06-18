@@ -145,8 +145,10 @@ export function CloudSignIn({
       <button type="button" onClick={signIn} style={signInBtn}>
         Sign in / register
       </button>
-      <div style={{ fontSize: 11.5, color: "var(--muted)", marginTop: 8 }}>
-        Opens your browser to sign in. You'll get free credits to start.
+      <div style={{ fontSize: 11.5, color: "var(--muted)", marginTop: 8, lineHeight: 1.5 }}>
+        Opens your browser to sign in. You'll get free credits to start — and
+        unlock part search across millions of orderable JLCPCB/LCSC components,
+        with in-stock filtering.
       </div>
       {error && (
         <div style={{ fontSize: 11.5, color: "var(--danger)", marginTop: 6 }}>{error}</div>

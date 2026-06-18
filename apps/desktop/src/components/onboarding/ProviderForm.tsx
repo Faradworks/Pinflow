@@ -1,11 +1,42 @@
 // The two-card provider picker + per-mode inputs. Shared by the first-run
 // OnboardingScreen and the SettingsModal so the two stay in lockstep.
 
-import type { ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 
-import type { AgentModel, LlmMode, PinflowConfig } from "../../lib/config";
+import { api } from "../../lib/api";
+import {
+  isServerLlmDisabled,
+  setServerLlmDisabled,
+  type AgentModel,
+  type LlmMode,
+  type PinflowConfig,
+} from "../../lib/config";
 import { CloudSignIn } from "./CloudSignIn";
 import { KeyField } from "./KeyField";
+
+/** Tracks BYOK-required mode (server-side key disabled). The flag is
+ *  gateway-served via /cloud/credits and only fully known once signed in, so
+ *  this re-fetches whenever `signedIn` flips. Mirrors the value into config so
+ *  getLlmHeaders() routes the next chat send correctly. */
+export function useServerLlmDisabled(signedIn: boolean): boolean {
+  const [disabled, setDisabled] = useState<boolean>(isServerLlmDisabled());
+  useEffect(() => {
+    let alive = true;
+    api
+      .cloudCredits()
+      .then((d) => {
+        if (!alive) return;
+        const v = !!d.byok_required;
+        setServerLlmDisabled(v);
+        setDisabled(v);
+      })
+      .catch(() => {});
+    return () => {
+      alive = false;
+    };
+  }, [signedIn]);
+  return disabled;
+}
 
 export interface ProviderDraft {
   mode: LlmMode | null;
@@ -28,9 +59,17 @@ export function draftToConfig(
   d: ProviderDraft,
   cloudSignedIn = false,
   keyInvalid = false,
+  serverLlmDisabled = false,
 ): PinflowConfig | null {
   if (d.mode === "cloud") {
-    return cloudSignedIn ? { mode: "cloud", model: d.model } : null;
+    if (!cloudSignedIn) return null;
+    // BYOK-required mode: cloud sign-in is for parts/credits, but the agent runs
+    // on the user's own key — so a valid key is also required to finish.
+    if (serverLlmDisabled) {
+      const key = d.anthropicKey.trim();
+      return key && !keyInvalid ? { mode: "cloud", anthropicKey: key, model: d.model } : null;
+    }
+    return { mode: "cloud", model: d.model };
   }
   if (d.mode === "self") {
     const key = d.anthropicKey.trim();
@@ -67,11 +106,13 @@ export function ProviderForm({
   onChange,
   onCloudSignedInChange,
   onKeyInvalidChange,
+  serverLlmDisabled = false,
 }: {
   value: ProviderDraft;
   onChange: (d: ProviderDraft) => void;
   onCloudSignedInChange: (signedIn: boolean) => void;
   onKeyInvalidChange: (invalid: boolean) => void;
+  serverLlmDisabled?: boolean;
 }) {
   const set = (patch: Partial<ProviderDraft>) => onChange({ ...value, ...patch });
 
@@ -100,7 +141,29 @@ export function ProviderForm({
       )}
 
       {value.mode === "cloud" && (
-        <CloudSignIn onSignedInChange={onCloudSignedInChange} />
+        <>
+          <CloudSignIn onSignedInChange={onCloudSignedInChange} />
+          {serverLlmDisabled && (
+            <>
+              <div
+                style={{
+                  fontSize: 11.5,
+                  color: "var(--muted)",
+                  marginTop: 12,
+                  lineHeight: 1.5,
+                }}
+              >
+                The agent runs on your own Anthropic key in this mode — sign-in
+                unlocks part search, but add a key below to power the chat.
+              </div>
+              <KeyField
+                value={value.anthropicKey}
+                onChange={(k) => set({ anthropicKey: k })}
+                onInvalidChange={onKeyInvalidChange}
+              />
+            </>
+          )}
+        </>
       )}
 
       <ModelSelect value={value.model} onChange={(m) => set({ model: m })} />

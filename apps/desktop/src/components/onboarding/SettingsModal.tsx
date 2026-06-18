@@ -11,6 +11,7 @@ import {
   ProviderForm,
   configToDraft,
   draftToConfig,
+  useServerLlmDisabled,
   type ProviderDraft,
 } from "./ProviderForm";
 
@@ -26,7 +27,8 @@ export function SettingsModal({
   const [draft, setDraft] = useState<ProviderDraft>(() => configToDraft(getConfig()));
   const [cloudSignedIn, setCloudSignedIn] = useState(false);
   const [keyInvalid, setKeyInvalid] = useState(false);
-  const cfg = draftToConfig(draft, cloudSignedIn, keyInvalid);
+  const serverLlmDisabled = useServerLlmDisabled(cloudSignedIn);
+  const cfg = draftToConfig(draft, cloudSignedIn, keyInvalid, serverLlmDisabled);
 
   function save() {
     if (!cfg) return;
@@ -104,6 +106,7 @@ export function SettingsModal({
           onChange={setDraft}
           onCloudSignedInChange={setCloudSignedIn}
           onKeyInvalidChange={setKeyInvalid}
+          serverLlmDisabled={serverLlmDisabled}
         />
 
         <div

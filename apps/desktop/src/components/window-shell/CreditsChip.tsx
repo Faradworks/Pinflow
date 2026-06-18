@@ -8,6 +8,7 @@ import { useEffect, useRef, useState } from "react";
 import type { CSSProperties } from "react";
 
 import { api, type CloudCredits } from "../../lib/api";
+import { setServerLlmDisabled } from "../../lib/config";
 
 const AMOUNTS = [10, 25, 50, 100];
 
@@ -20,7 +21,15 @@ export function CreditsChip({ refreshKey }: { refreshKey: number }) {
   const pollRef = useRef<number | null>(null);
 
   function load() {
-    api.cloudCredits().then(setData).catch(() => {});
+    api
+      .cloudCredits()
+      .then((d) => {
+        setData(d);
+        // Mirror the gateway flag into config so getLlmHeaders() routes the next
+        // chat send to the user's own key (and the UI hides top-up).
+        setServerLlmDisabled(!!d.byok_required);
+      })
+      .catch(() => {});
   }
 
   useEffect(() => {
@@ -157,22 +166,31 @@ export function CreditsChip({ refreshKey }: { refreshKey: number }) {
             </b>{" "}
             credits
           </div>
-          <div style={{ fontSize: 11.5, color: "var(--ink-2)", marginBottom: 6 }}>Top up</div>
-          <div style={{ display: "flex", gap: 6 }}>
-            {AMOUNTS.map((a) => (
-              <button key={a} type="button" disabled={busy} onClick={() => topUp(a)} style={amtBtn}>
-                ${a}
-              </button>
-            ))}
-          </div>
-          {error ? (
-            <div style={{ fontSize: 11, color: "var(--pending)", marginTop: 8, lineHeight: 1.4 }}>
-              {error}
+          {data.byok_required ? (
+            <div style={{ fontSize: 11, color: "var(--muted)", marginTop: 2, lineHeight: 1.4 }}>
+              Credits aren't spendable in this mode — the agent runs on your own
+              Anthropic key.
             </div>
           ) : (
-            <div style={{ fontSize: 11, color: "var(--muted)", marginTop: 8 }}>
-              Opens Stripe Checkout in your browser.
-            </div>
+            <>
+              <div style={{ fontSize: 11.5, color: "var(--ink-2)", marginBottom: 6 }}>Top up</div>
+              <div style={{ display: "flex", gap: 6 }}>
+                {AMOUNTS.map((a) => (
+                  <button key={a} type="button" disabled={busy} onClick={() => topUp(a)} style={amtBtn}>
+                    ${a}
+                  </button>
+                ))}
+              </div>
+              {error ? (
+                <div style={{ fontSize: 11, color: "var(--pending)", marginTop: 8, lineHeight: 1.4 }}>
+                  {error}
+                </div>
+              ) : (
+                <div style={{ fontSize: 11, color: "var(--muted)", marginTop: 8 }}>
+                  Opens Stripe Checkout in your browser.
+                </div>
+              )}
+            </>
           )}
           <button type="button" onClick={signOut} style={signOutBtn}>
             Sign out

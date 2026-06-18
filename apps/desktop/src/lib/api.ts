@@ -15,6 +15,9 @@ export type CloudCredits = {
   configured: boolean;
   balance?: number;
   next_expiry?: string | null;
+  // True when the gateway has no server-side Anthropic key: top-up is hidden and
+  // the agent must run on the user's own key.
+  byok_required?: boolean;
   error?: string;
 };
 

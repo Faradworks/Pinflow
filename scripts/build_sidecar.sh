@@ -89,15 +89,21 @@ if [[ "$(uname -s)" == "Darwin" ]]; then
   fi
   launcher="$BIN/pinflow-api/pinflow-api"
   # Every nested Mach-O must be signed for notarization — not just *.so/*.dylib.
-  # PyInstaller also ships extensionless binaries (e.g. _internal/Python) and an
-  # embedded Python.framework whose binary has no suffix. Sign in three passes:
-  # 1) frameworks as bundles (seals the versioned binary + Resources correctly),
-  # 2) every remaining Mach-O detected by content (covers extensionless ones;
-  #    -type f skips Versions/Current and other symlinks → real file signed once),
+  # PyInstaller also ships an embedded Python.framework and extensionless
+  # binaries. Sign in three passes:
+  # 1) framework VERSION dirs (e.g. Python.framework/Versions/3.12) — a versioned
+  #    framework must be signed at its version dir, not the .framework root, or
+  #    codesign writes a flat layout the notary rejects as "signature invalid".
+  #    The Current symlink is skipped (-type d won't match a symlink); the
+  #    Python.framework/Python and _internal/Python symlinks resolve to the
+  #    binary inside the version dir, so signing it once covers all three.
+  # 2) every remaining Mach-O detected by content, OUTSIDE any framework (so we
+  #    don't re-sign the framework binary's inode and break its bundle seal).
+  #    -type f skips symlinks → each real binary signed once.
   # 3) the launcher last so its seal covers the onedir tree.
-  while IFS= read -r -d '' fw; do
-    codesign "${sign_opts[@]}" "$fw"
-  done < <(find "$BIN/pinflow-api" -type d -name '*.framework' -print0)
+  while IFS= read -r -d '' vdir; do
+    codesign "${sign_opts[@]}" "$vdir"
+  done < <(find "$BIN/pinflow-api" -type d -path '*.framework/Versions/*' -prune -print0)
   while IFS= read -r -d '' f; do
     [[ "$f" == "$launcher" ]] && continue
     file -b "$f" | grep -q 'Mach-O' && codesign "${sign_opts[@]}" "$f"

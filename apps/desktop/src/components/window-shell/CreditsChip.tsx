@@ -168,8 +168,8 @@ export function CreditsChip({ refreshKey }: { refreshKey: number }) {
           </div>
           {data.byok_required ? (
             <div style={{ fontSize: 11, color: "var(--muted)", marginTop: 2, lineHeight: 1.4 }}>
-              Credits aren't spendable in this mode — the agent runs on your own
-              Anthropic key.
+              Pinflow Cloud is currently unavailable for running the agent — it
+              runs on your own Anthropic key for now. Part search still works.
             </div>
           ) : (
             <>

@@ -78,6 +78,31 @@ export function draftToConfig(
   return null;
 }
 
+/** Human-readable reason the current draft can't be saved yet, or null when it's
+ *  valid. Mirrors `draftToConfig`'s gates so the UI can explain a disabled
+ *  Save/Continue button instead of leaving the user guessing. */
+export function draftBlockerReason(
+  d: ProviderDraft,
+  cloudSignedIn = false,
+  keyInvalid = false,
+  serverLlmDisabled = false,
+): string | null {
+  if (!d.mode) return "Choose how to run Pinflow to continue.";
+  const key = d.anthropicKey.trim();
+  if (d.mode === "cloud") {
+    if (!cloudSignedIn) return "Sign in to Pinflow Cloud to continue.";
+    if (serverLlmDisabled) {
+      if (!key) return "Pinflow Cloud is currently unavailable for the agent — add your Anthropic key to continue.";
+      if (keyInvalid) return "That Anthropic key isn't valid yet — check it and try again.";
+    }
+    return null;
+  }
+  // self
+  if (!key) return "Add your Anthropic key to continue.";
+  if (keyInvalid) return "That Anthropic key isn't valid yet — check it and try again.";
+  return null;
+}
+
 const CARDS: {
   mode: LlmMode;
   icon: ReactNode;
@@ -116,10 +141,24 @@ export function ProviderForm({
 }) {
   const set = (patch: Partial<ProviderDraft>) => onChange({ ...value, ...patch });
 
+  // When cloud LLM is unavailable, the card's "no API key to manage" promise no
+  // longer holds — sign-in is for parts/credits, the agent runs on the user's key.
+  const cards = CARDS.map((c) =>
+    c.mode === "cloud" && serverLlmDisabled
+      ? {
+          ...c,
+          tag: "key needed",
+          blurb:
+            "Currently unavailable for running the agent. Sign in for part " +
+            "search — you'll run the agent on your own Anthropic key.",
+        }
+      : c,
+  );
+
   return (
     <div>
       <div style={{ display: "flex", gap: 10 }}>
-        {CARDS.map((c) => (
+        {cards.map((c) => (
           <CardButton
             key={c.mode}
             selected={value.mode === c.mode}
@@ -142,31 +181,43 @@ export function ProviderForm({
 
       {value.mode === "cloud" && (
         <>
+          {serverLlmDisabled && <ByokCallout />}
           <CloudSignIn onSignedInChange={onCloudSignedInChange} />
           {serverLlmDisabled && (
-            <>
-              <div
-                style={{
-                  fontSize: 11.5,
-                  color: "var(--muted)",
-                  marginTop: 12,
-                  lineHeight: 1.5,
-                }}
-              >
-                The agent runs on your own Anthropic key in this mode — sign-in
-                unlocks part search, but add a key below to power the chat.
-              </div>
-              <KeyField
-                value={value.anthropicKey}
-                onChange={(k) => set({ anthropicKey: k })}
-                onInvalidChange={onKeyInvalidChange}
-              />
-            </>
+            <KeyField
+              value={value.anthropicKey}
+              onChange={(k) => set({ anthropicKey: k })}
+              onInvalidChange={onKeyInvalidChange}
+            />
           )}
         </>
       )}
 
       <ModelSelect value={value.model} onChange={(m) => set({ model: m })} />
+    </div>
+  );
+}
+
+/** Explains, in friendly/generic terms, why a key is needed even though Pinflow
+ *  Cloud is selected — shown above sign-in so the requirement is clear before the
+ *  user hunts for a Save. Deliberately doesn't expose the operational flag. */
+function ByokCallout() {
+  return (
+    <div
+      style={{
+        marginTop: 14,
+        padding: "10px 12px",
+        fontSize: 12,
+        lineHeight: 1.5,
+        color: "var(--ink-2)",
+        background: "var(--pending-soft)",
+        border: "1px solid var(--pending)",
+        borderRadius: 8,
+      }}
+    >
+      <b style={{ color: "var(--ink)" }}>Pinflow Cloud is currently unavailable
+      for running the agent.</b> You can still sign in to use part search — to keep
+      chatting, just add your own Anthropic key below.
     </div>
   );
 }

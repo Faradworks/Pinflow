@@ -39,7 +39,15 @@ fi
 
 echo "==> create build venv (uv, Python: $PY_REQUEST)"
 cd "$API"
-uv venv --clear "$VENV" --python "$PY_REQUEST"
+# --python-preference only-managed forces uv to use a relocatable
+# python-build-standalone interpreter rather than whatever Python the host
+# happens to have. This is load-bearing on macOS arm64: a bare "3.12" lets uv
+# pick the runner's *framework* Python, which makes PyInstaller embed a
+# Python.framework whose code signature Apple notarization rejects. The managed
+# standalone ships a loose libpython dylib instead (same shape the x86_64 cross
+# leg already used and notarizes cleanly), so every nested Mach-O is a plain file
+# the signing pass below covers. Also makes the build reproducible across hosts.
+uv venv --clear "$VENV" --python "$PY_REQUEST" --python-preference only-managed
 # Force a prebuilt cryptography wheel. On the cross-arch path (x86_64 interpreter
 # under Rosetta on an arm64 runner) uv otherwise falls back to a source build,
 # which drags in maturin + a Rust openssl-sys compile that fails for lack of
@@ -89,27 +97,17 @@ if [[ "$(uname -s)" == "Darwin" ]]; then
   fi
   launcher="$BIN/pinflow-api/pinflow-api"
   # Every nested Mach-O must be signed for notarization — not just *.so/*.dylib.
-  # PyInstaller also ships an embedded Python.framework and extensionless
-  # binaries. ORDER MATTERS: the arm64 build hardlinks _internal/Python to the
-  # framework binary (the x86_64 build symlinks it), so we must sign loose
-  # binaries FIRST and re-seal the framework LAST — otherwise the bare signature
-  # written via the _internal/Python hardlink clobbers the framework's bundle
-  # seal and the notary rejects it ("signature invalid"). Three passes:
-  # 1) every Mach-O detected by content OUTSIDE any framework (covers the loose
-  #    _internal/Python; -type f skips symlinks so each real binary is hit once);
-  # 2) framework VERSION dirs (e.g. Python.framework/Versions/3.12) — sign the
-  #    version dir, NOT the .framework root, or codesign writes a flat layout the
-  #    notary rejects. This is the final write on the (possibly hardlinked)
-  #    framework binary, so its bundle seal stays valid. The Current symlink is
-  #    skipped (-type d won't match a symlink);
-  # 3) the launcher last so its seal covers the onedir tree.
+  # PyInstaller also ships an extensionless libpython dylib and other binaries, so
+  # detect Mach-O by content rather than by suffix. The managed standalone Python
+  # (forced above) produces only loose dylibs — no Python.framework to special-
+  # case (a versioned framework's bundle seal is notoriously fiddly to sign right;
+  # we sidestep it entirely by not embedding one). -type f skips symlinks so each
+  # real binary is signed once; the launcher is signed last so its seal covers
+  # the onedir tree.
   while IFS= read -r -d '' f; do
     [[ "$f" == "$launcher" ]] && continue
     file -b "$f" | grep -q 'Mach-O' && codesign "${sign_opts[@]}" "$f"
-  done < <(find "$BIN/pinflow-api" -type f -not -path '*.framework/*' -print0)
-  while IFS= read -r -d '' vdir; do
-    codesign "${sign_opts[@]}" "$vdir"
-  done < <(find "$BIN/pinflow-api" -type d -path '*.framework/Versions/*' -prune -print0)
+  done < <(find "$BIN/pinflow-api" -type f -print0)
   codesign "${sign_opts[@]}" "$launcher"
 fi
 

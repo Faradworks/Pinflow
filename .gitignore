@@ -86,3 +86,8 @@ services/api/dist/
 services/api/*.spec
 services/api/.venv-build/
 apps/desktop/src-tauri/binaries/
+
+# Apple code-signing material — lives only locally / in GitHub Actions secrets,
+# never in the repo (see .github/workflows/release.yml).
+*.p12
+*.p8

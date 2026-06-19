@@ -28,7 +28,7 @@ jobs:
           - label: macos-arm64
             os: macos-14
             rust-target: aarch64-apple-darwin
-            tauri-args: "--target aarch64-apple-darwin --bundles app,dmg --config src-tauri/tauri.bundle.conf.json"
+            tauri-args: "--target aarch64-apple-darwin --bundles app,dmg --config src-tauri/tauri.bundle.conf.json --config src-tauri/tauri.signing.conf.json"
             py-arch: ""
           # Intel macOS is cross-built on an Apple Silicon runner (Rust target +
           # an x86_64 PyInstaller sidecar via Rosetta 2) to avoid GitHub's scarce
@@ -36,7 +36,7 @@ jobs:
           - label: macos-x64
             os: macos-14
             rust-target: x86_64-apple-darwin
-            tauri-args: "--target x86_64-apple-darwin --bundles app,dmg --config src-tauri/tauri.bundle.conf.json"
+            tauri-args: "--target x86_64-apple-darwin --bundles app,dmg --config src-tauri/tauri.bundle.conf.json --config src-tauri/tauri.signing.conf.json"
             py-arch: "x86_64"
           - label: windows-x64
             os: windows-latest
@@ -115,12 +115,31 @@ jobs:
         shell: bash
         run: bash scripts/smoke_sidecar.sh
 
+      # macOS code signing + notarization. Write the App Store Connect API key
+      # (.p8) to disk from a base64 secret and hand tauri-action its path; the
+      # Developer ID cert (.p12) is imported by tauri-action from APPLE_CERTIFICATE.
+      # The signing identity itself comes from tauri.signing.conf.json (not secret).
+      - name: Set up notarization API key
+        if: runner.os == 'macOS'
+        run: |
+          KEY_PATH="$RUNNER_TEMP/apple_api_key.p8"
+          echo "${{ secrets.APPLE_API_KEY_P8 }}" | base64 --decode > "$KEY_PATH"
+          echo "APPLE_API_KEY_PATH=$KEY_PATH" >> "$GITHUB_ENV"
+
       # On a tag: create/append a draft GitHub Release with the installers.
       # On manual dispatch: tagName is empty, so tauri-action only builds.
       - name: Build app (and release on tag)
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # macOS-only; harmlessly empty/ignored on Windows + Linux legs.
+          # Developer ID cert import (tauri-action sets up a temp keychain):
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          # Notarization via App Store Connect API key (APPLE_API_KEY_PATH is
+          # exported by the step above on macOS):
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
         with:
           projectPath: apps/desktop
           tagName: ${{ github.ref_type == 'tag' && github.ref_name || '' }}

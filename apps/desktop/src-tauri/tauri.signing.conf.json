@@ -1,0 +1,9 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "_comment": "CI-only overlay: real Developer ID signing identity. Layered on top of tauri.bundle.conf.json in the macOS release legs (see .github/workflows/release.yml) so notarized release builds are signed with a real cert, while the base tauri.conf.json keeps signingIdentity '-' (ad-hoc) for local `tauri dev` / build_desktop.sh. The identity string is not a secret (it ships embedded in every signed binary); the .p12, its password, and the notarization API key are GitHub Actions secrets.",
+  "bundle": {
+    "macOS": {
+      "signingIdentity": "Developer ID Application: Siddharth Kothari (8RY4V8V3Y6)"
+    }
+  }
+}

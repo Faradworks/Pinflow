@@ -95,6 +95,18 @@ jobs:
 
       - uses: astral-sh/setup-uv@v5
 
+      # Import the Developer ID cert into a keychain BEFORE the sidecar build, so
+      # build_sidecar.sh can sign the nested Mach-O files (.so/.dylib + launcher)
+      # with it. Notarization requires every nested binary to carry a Developer ID
+      # signature + secure timestamp; tauri-action only signs the outer .app, so
+      # the sidecar must be signed here. Same cert tauri-action uses for the .app.
+      - name: Import Developer ID certificate
+        if: runner.os == 'macOS'
+        uses: apple-actions/import-codesign-certs@v3
+        with:
+          p12-file-base64: ${{ secrets.APPLE_CERTIFICATE }}
+          p12-password: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+
       # The Intel sidecar is an x86_64 binary built on this arm64 runner; it runs
       # (build + smoke test) under Rosetta 2. Pre-installed on the image, but be
       # explicit so the leg fails loudly rather than mysteriously if it's absent.
@@ -108,6 +120,10 @@ jobs:
         shell: bash
         env:
           PINFLOW_PY_ARCH: ${{ matrix.py-arch }}
+          # macOS: sign the sidecar's nested Mach-O with the Developer ID just
+          # imported (keep in lockstep with tauri.signing.conf.json). Empty/unset
+          # elsewhere → build_sidecar.sh ad-hoc signs (or no-ops off macOS).
+          PINFLOW_MAC_SIGN_IDENTITY: "${{ runner.os == 'macOS' && 'Developer ID Application: Siddharth Kothari (8RY4V8V3Y6)' || '' }}"
         run: bash scripts/build_sidecar.sh
 
       # Fail fast on per-OS packaging gaps before the long Tauri bundle step.
@@ -133,11 +149,11 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           # macOS-only; harmlessly empty/ignored on Windows + Linux legs.
-          # Developer ID cert import (tauri-action sets up a temp keychain):
-          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
-          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
-          # Notarization via App Store Connect API key (APPLE_API_KEY_PATH is
-          # exported by the step above on macOS):
+          # The Developer ID cert is already in the keychain (Import step above),
+          # so tauri build signs the outer .app with the identity from
+          # tauri.signing.conf.json — no APPLE_CERTIFICATE here (that would make
+          # tauri-action create a second, competing keychain). Notarization runs
+          # via the App Store Connect API key (APPLE_API_KEY_PATH exported above):
           APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
           APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
         with:

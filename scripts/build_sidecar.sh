@@ -64,20 +64,32 @@ rm -rf "$BIN/pinflow-api"
 mkdir -p "$BIN"
 cp -R "$API/dist/pinflow-api" "$BIN/pinflow-api"
 
-# Ad-hoc codesign the staged sidecar on macOS (we don't have an Apple Developer
-# cert yet — `-` is the ad-hoc identity, no account required). Without this, the
-# nested Mach-O files are unsigned: on Apple Silicon the kernel kills the spawned
+# Codesign the staged sidecar's nested Mach-O files on macOS. Without this, the
+# nested binaries are unsigned: on Apple Silicon the kernel kills the spawned
 # `pinflow-api` launcher and dyld rejects the dlopen'd .so/.dylib files, so the
 # app boots to a dead backend. The launcher must be signed AFTER its nested
-# libraries so the seal covers them. The outer .app is signed separately —
-# `tauri build`/tauri-action via bundle.macOS.signingIdentity "-" in CI, and a
-# `--deep` re-sign in scripts/build_desktop.sh locally. Remove the ad-hoc path
-# (here + that config key) once notarization with a real Developer ID lands.
+# libraries so the seal covers them.
+#
+# Identity is chosen by PINFLOW_MAC_SIGN_IDENTITY:
+#   - unset / "-"  → ad-hoc (local `build_desktop.sh`, no Apple account needed).
+#   - a Developer ID → real signing with hardened runtime + a secure timestamp,
+#     which is what Apple notarization requires of EVERY nested Mach-O (the
+#     outer .app is signed + notarized separately by tauri-action). The release
+#     workflow imports the cert and sets this before calling us (see
+#     .github/workflows/release.yml). codesign finds the identity in the keychain
+#     that step set up.
 if [[ "$(uname -s)" == "Darwin" ]]; then
-  echo "==> ad-hoc codesign the staged sidecar (no Apple Developer cert yet)"
+  SIGN_ID="${PINFLOW_MAC_SIGN_IDENTITY:--}"
+  if [[ "$SIGN_ID" == "-" ]]; then
+    echo "==> ad-hoc codesign the staged sidecar (no Developer ID identity set)"
+    sign_opts=(--force --sign - --timestamp=none)
+  else
+    echo "==> Developer ID codesign the staged sidecar ($SIGN_ID)"
+    sign_opts=(--force --options runtime --timestamp --sign "$SIGN_ID")
+  fi
   find "$BIN/pinflow-api" -type f \( -name '*.so' -o -name '*.dylib' \) \
-    -exec codesign --force --sign - --timestamp=none {} +
-  codesign --force --sign - --timestamp=none "$BIN/pinflow-api/pinflow-api"
+    -exec codesign "${sign_opts[@]}" {} +
+  codesign "${sign_opts[@]}" "$BIN/pinflow-api/pinflow-api"
 fi
 
 echo "==> sidecar staged at $BIN/pinflow-api"

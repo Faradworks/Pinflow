@@ -90,24 +90,26 @@ if [[ "$(uname -s)" == "Darwin" ]]; then
   launcher="$BIN/pinflow-api/pinflow-api"
   # Every nested Mach-O must be signed for notarization — not just *.so/*.dylib.
   # PyInstaller also ships an embedded Python.framework and extensionless
-  # binaries. Sign in three passes:
-  # 1) framework VERSION dirs (e.g. Python.framework/Versions/3.12) — a versioned
-  #    framework must be signed at its version dir, not the .framework root, or
-  #    codesign writes a flat layout the notary rejects as "signature invalid".
-  #    The Current symlink is skipped (-type d won't match a symlink); the
-  #    Python.framework/Python and _internal/Python symlinks resolve to the
-  #    binary inside the version dir, so signing it once covers all three.
-  # 2) every remaining Mach-O detected by content, OUTSIDE any framework (so we
-  #    don't re-sign the framework binary's inode and break its bundle seal).
-  #    -type f skips symlinks → each real binary signed once.
+  # binaries. ORDER MATTERS: the arm64 build hardlinks _internal/Python to the
+  # framework binary (the x86_64 build symlinks it), so we must sign loose
+  # binaries FIRST and re-seal the framework LAST — otherwise the bare signature
+  # written via the _internal/Python hardlink clobbers the framework's bundle
+  # seal and the notary rejects it ("signature invalid"). Three passes:
+  # 1) every Mach-O detected by content OUTSIDE any framework (covers the loose
+  #    _internal/Python; -type f skips symlinks so each real binary is hit once);
+  # 2) framework VERSION dirs (e.g. Python.framework/Versions/3.12) — sign the
+  #    version dir, NOT the .framework root, or codesign writes a flat layout the
+  #    notary rejects. This is the final write on the (possibly hardlinked)
+  #    framework binary, so its bundle seal stays valid. The Current symlink is
+  #    skipped (-type d won't match a symlink);
   # 3) the launcher last so its seal covers the onedir tree.
-  while IFS= read -r -d '' vdir; do
-    codesign "${sign_opts[@]}" "$vdir"
-  done < <(find "$BIN/pinflow-api" -type d -path '*.framework/Versions/*' -prune -print0)
   while IFS= read -r -d '' f; do
     [[ "$f" == "$launcher" ]] && continue
     file -b "$f" | grep -q 'Mach-O' && codesign "${sign_opts[@]}" "$f"
   done < <(find "$BIN/pinflow-api" -type f -not -path '*.framework/*' -print0)
+  while IFS= read -r -d '' vdir; do
+    codesign "${sign_opts[@]}" "$vdir"
+  done < <(find "$BIN/pinflow-api" -type d -path '*.framework/Versions/*' -prune -print0)
   codesign "${sign_opts[@]}" "$launcher"
 fi
 

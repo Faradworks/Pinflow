@@ -87,9 +87,22 @@ if [[ "$(uname -s)" == "Darwin" ]]; then
     echo "==> Developer ID codesign the staged sidecar ($SIGN_ID)"
     sign_opts=(--force --options runtime --timestamp --sign "$SIGN_ID")
   fi
-  find "$BIN/pinflow-api" -type f \( -name '*.so' -o -name '*.dylib' \) \
-    -exec codesign "${sign_opts[@]}" {} +
-  codesign "${sign_opts[@]}" "$BIN/pinflow-api/pinflow-api"
+  launcher="$BIN/pinflow-api/pinflow-api"
+  # Every nested Mach-O must be signed for notarization — not just *.so/*.dylib.
+  # PyInstaller also ships extensionless binaries (e.g. _internal/Python) and an
+  # embedded Python.framework whose binary has no suffix. Sign in three passes:
+  # 1) frameworks as bundles (seals the versioned binary + Resources correctly),
+  # 2) every remaining Mach-O detected by content (covers extensionless ones;
+  #    -type f skips Versions/Current and other symlinks → real file signed once),
+  # 3) the launcher last so its seal covers the onedir tree.
+  while IFS= read -r -d '' fw; do
+    codesign "${sign_opts[@]}" "$fw"
+  done < <(find "$BIN/pinflow-api" -type d -name '*.framework' -print0)
+  while IFS= read -r -d '' f; do
+    [[ "$f" == "$launcher" ]] && continue
+    file -b "$f" | grep -q 'Mach-O' && codesign "${sign_opts[@]}" "$f"
+  done < <(find "$BIN/pinflow-api" -type f -not -path '*.framework/*' -print0)
+  codesign "${sign_opts[@]}" "$launcher"
 fi
 
 echo "==> sidecar staged at $BIN/pinflow-api"

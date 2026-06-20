@@ -140,10 +140,10 @@ jobs:
         shell: bash
         run: bash scripts/smoke_sidecar.sh
 
-      # macOS code signing + notarization. Write the App Store Connect API key
-      # (.p8) to disk from a base64 secret and hand tauri-action its path; the
-      # Developer ID cert (.p12) is imported by tauri-action from APPLE_CERTIFICATE.
-      # The signing identity itself comes from tauri.signing.conf.json (not secret).
+      # macOS notarization. Write the App Store Connect API key (.p8) to disk from
+      # a base64 secret and hand tauri-action its path. (The Developer ID cert was
+      # imported into the keychain by the "Import Developer ID certificate" step
+      # above; the signing identity comes from the generated tauri.signing.conf.json.)
       - name: Set up notarization API key
         if: runner.os == 'macOS'
         run: |

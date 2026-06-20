@@ -1,11 +1,42 @@
 // The two-card provider picker + per-mode inputs. Shared by the first-run
 // OnboardingScreen and the SettingsModal so the two stay in lockstep.
 
-import type { ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 
-import type { AgentModel, LlmMode, PinflowConfig } from "../../lib/config";
+import { api } from "../../lib/api";
+import {
+  isServerLlmDisabled,
+  setServerLlmDisabled,
+  type AgentModel,
+  type LlmMode,
+  type PinflowConfig,
+} from "../../lib/config";
 import { CloudSignIn } from "./CloudSignIn";
 import { KeyField } from "./KeyField";
+
+/** Tracks BYOK-required mode (server-side key disabled). The flag is
+ *  gateway-served via /cloud/credits and only fully known once signed in, so
+ *  this re-fetches whenever `signedIn` flips. Mirrors the value into config so
+ *  getLlmHeaders() routes the next chat send correctly. */
+export function useServerLlmDisabled(signedIn: boolean): boolean {
+  const [disabled, setDisabled] = useState<boolean>(isServerLlmDisabled());
+  useEffect(() => {
+    let alive = true;
+    api
+      .cloudCredits()
+      .then((d) => {
+        if (!alive) return;
+        const v = !!d.byok_required;
+        setServerLlmDisabled(v);
+        setDisabled(v);
+      })
+      .catch(() => {});
+    return () => {
+      alive = false;
+    };
+  }, [signedIn]);
+  return disabled;
+}
 
 export interface ProviderDraft {
   mode: LlmMode | null;
@@ -28,14 +59,47 @@ export function draftToConfig(
   d: ProviderDraft,
   cloudSignedIn = false,
   keyInvalid = false,
+  serverLlmDisabled = false,
 ): PinflowConfig | null {
   if (d.mode === "cloud") {
-    return cloudSignedIn ? { mode: "cloud", model: d.model } : null;
+    if (!cloudSignedIn) return null;
+    // BYOK-required mode: cloud sign-in is for parts/credits, but the agent runs
+    // on the user's own key — so a valid key is also required to finish.
+    if (serverLlmDisabled) {
+      const key = d.anthropicKey.trim();
+      return key && !keyInvalid ? { mode: "cloud", anthropicKey: key, model: d.model } : null;
+    }
+    return { mode: "cloud", model: d.model };
   }
   if (d.mode === "self") {
     const key = d.anthropicKey.trim();
     return key && !keyInvalid ? { mode: "self", anthropicKey: key, model: d.model } : null;
   }
+  return null;
+}
+
+/** Human-readable reason the current draft can't be saved yet, or null when it's
+ *  valid. Mirrors `draftToConfig`'s gates so the UI can explain a disabled
+ *  Save/Continue button instead of leaving the user guessing. */
+export function draftBlockerReason(
+  d: ProviderDraft,
+  cloudSignedIn = false,
+  keyInvalid = false,
+  serverLlmDisabled = false,
+): string | null {
+  if (!d.mode) return "Choose how to run Pinflow to continue.";
+  const key = d.anthropicKey.trim();
+  if (d.mode === "cloud") {
+    if (!cloudSignedIn) return "Sign in to Pinflow Cloud to continue.";
+    if (serverLlmDisabled) {
+      if (!key) return "Pinflow Cloud is currently unavailable for the agent — add your Anthropic key to continue.";
+      if (keyInvalid) return "That Anthropic key isn't valid yet — check it and try again.";
+    }
+    return null;
+  }
+  // self
+  if (!key) return "Add your Anthropic key to continue.";
+  if (keyInvalid) return "That Anthropic key isn't valid yet — check it and try again.";
   return null;
 }
 
@@ -67,18 +131,34 @@ export function ProviderForm({
   onChange,
   onCloudSignedInChange,
   onKeyInvalidChange,
+  serverLlmDisabled = false,
 }: {
   value: ProviderDraft;
   onChange: (d: ProviderDraft) => void;
   onCloudSignedInChange: (signedIn: boolean) => void;
   onKeyInvalidChange: (invalid: boolean) => void;
+  serverLlmDisabled?: boolean;
 }) {
   const set = (patch: Partial<ProviderDraft>) => onChange({ ...value, ...patch });
+
+  // When cloud LLM is unavailable, the card's "no API key to manage" promise no
+  // longer holds — sign-in is for parts/credits, the agent runs on the user's key.
+  const cards = CARDS.map((c) =>
+    c.mode === "cloud" && serverLlmDisabled
+      ? {
+          ...c,
+          tag: "key needed",
+          blurb:
+            "Currently unavailable for running the agent. Sign in for part " +
+            "search — you'll run the agent on your own Anthropic key.",
+        }
+      : c,
+  );
 
   return (
     <div>
       <div style={{ display: "flex", gap: 10 }}>
-        {CARDS.map((c) => (
+        {cards.map((c) => (
           <CardButton
             key={c.mode}
             selected={value.mode === c.mode}
@@ -100,10 +180,44 @@ export function ProviderForm({
       )}
 
       {value.mode === "cloud" && (
-        <CloudSignIn onSignedInChange={onCloudSignedInChange} />
+        <>
+          {serverLlmDisabled && <ByokCallout />}
+          <CloudSignIn onSignedInChange={onCloudSignedInChange} />
+          {serverLlmDisabled && (
+            <KeyField
+              value={value.anthropicKey}
+              onChange={(k) => set({ anthropicKey: k })}
+              onInvalidChange={onKeyInvalidChange}
+            />
+          )}
+        </>
       )}
 
       <ModelSelect value={value.model} onChange={(m) => set({ model: m })} />
+    </div>
+  );
+}
+
+/** Explains, in friendly/generic terms, why a key is needed even though Pinflow
+ *  Cloud is selected — shown above sign-in so the requirement is clear before the
+ *  user hunts for a Save. Deliberately doesn't expose the operational flag. */
+function ByokCallout() {
+  return (
+    <div
+      style={{
+        marginTop: 14,
+        padding: "10px 12px",
+        fontSize: 12,
+        lineHeight: 1.5,
+        color: "var(--ink-2)",
+        background: "var(--pending-soft)",
+        border: "1px solid var(--pending)",
+        borderRadius: 8,
+      }}
+    >
+      <b style={{ color: "var(--ink)" }}>Pinflow Cloud is currently unavailable
+      for running the agent.</b> You can still sign in to use part search — to keep
+      chatting, just add your own Anthropic key below.
     </div>
   );
 }

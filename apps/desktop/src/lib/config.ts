@@ -6,6 +6,7 @@
 // while App.tsx keeps a React-state mirror to drive re-rendering.
 
 const KEY = "pinflow.config";
+const BYOK_KEY = "pinflow.byok_required";
 
 export type LlmMode = "cloud" | "self";
 /** Hero-loop model. `opus` is the default (strongest); `sonnet` is cheaper/faster. */
@@ -23,6 +24,29 @@ const DEFAULT_API_BASE: string =
   (import.meta as any).env?.VITE_PINFLOW_API_URL ?? "http://127.0.0.1:8787";
 
 let _config: PinflowConfig | null = readConfig();
+
+// BYOK-required mode (server-side Anthropic key disabled). Gateway-served via
+// /cloud/credits; cached here + persisted so getLlmHeaders() routes correctly on
+// the very next chat send and before the first credits fetch resolves at launch.
+let _serverLlmDisabled: boolean = (() => {
+  try {
+    return localStorage.getItem(BYOK_KEY) === "1";
+  } catch {
+    return false;
+  }
+})();
+
+export function isServerLlmDisabled(): boolean {
+  return _serverLlmDisabled;
+}
+
+export function setServerLlmDisabled(disabled: boolean): void {
+  _serverLlmDisabled = disabled;
+  try {
+    if (disabled) localStorage.setItem(BYOK_KEY, "1");
+    else localStorage.removeItem(BYOK_KEY);
+  } catch {}
+}
 
 function readConfig(): PinflowConfig | null {
   try {
@@ -72,6 +96,16 @@ export function getLlmHeaders(): Record<string, string> {
   const headers: Record<string, string> = {
     "X-Pinflow-Agent-Model": c?.model === "sonnet" ? "sonnet" : "opus",
   };
+  // BYOK-required mode: the server-side key is disabled, so never route LLM
+  // through the cloud gateway — force the user's own key regardless of mode. The
+  // cloud session (parts search) is attached server-side and is unaffected.
+  if (_serverLlmDisabled) {
+    if (c?.anthropicKey) {
+      headers["X-Pinflow-LLM-Provider"] = "self";
+      headers["X-Anthropic-Api-Key"] = c.anthropicKey;
+    }
+    return headers;
+  }
   if (c?.mode === "self" && c.anthropicKey) {
     headers["X-Pinflow-LLM-Provider"] = "self";
     headers["X-Anthropic-Api-Key"] = c.anthropicKey;

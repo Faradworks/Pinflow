@@ -55,6 +55,9 @@ async def credits():
             "configured": True,
             "balance": d.get("balance"),
             "next_expiry": d.get("next_expiry"),
+            # Gateway reports byok_required when it has no server-side Anthropic
+            # key: the agent must run on the user's own key (top-up is hidden).
+            "byok_required": bool(d.get("byok_required")),
         }
     except Exception as e:
         return {"signed_in": True, "configured": True, "error": str(e)}

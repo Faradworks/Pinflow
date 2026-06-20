@@ -11,6 +11,8 @@ import {
   ProviderForm,
   configToDraft,
   draftToConfig,
+  draftBlockerReason,
+  useServerLlmDisabled,
   type ProviderDraft,
 } from "./ProviderForm";
 
@@ -26,7 +28,9 @@ export function SettingsModal({
   const [draft, setDraft] = useState<ProviderDraft>(() => configToDraft(getConfig()));
   const [cloudSignedIn, setCloudSignedIn] = useState(false);
   const [keyInvalid, setKeyInvalid] = useState(false);
-  const cfg = draftToConfig(draft, cloudSignedIn, keyInvalid);
+  const serverLlmDisabled = useServerLlmDisabled(cloudSignedIn);
+  const cfg = draftToConfig(draft, cloudSignedIn, keyInvalid, serverLlmDisabled);
+  const blocker = draftBlockerReason(draft, cloudSignedIn, keyInvalid, serverLlmDisabled);
 
   function save() {
     if (!cfg) return;
@@ -104,13 +108,28 @@ export function SettingsModal({
           onChange={setDraft}
           onCloudSignedInChange={setCloudSignedIn}
           onKeyInvalidChange={setKeyInvalid}
+          serverLlmDisabled={serverLlmDisabled}
         />
+
+        {blocker && (
+          <div
+            style={{
+              marginTop: 18,
+              fontSize: 12,
+              color: "var(--muted)",
+              lineHeight: 1.45,
+              textAlign: "right",
+            }}
+          >
+            {blocker}
+          </div>
+        )}
 
         <div
           style={{
             display: "flex",
             alignItems: "center",
-            marginTop: 24,
+            marginTop: blocker ? 10 : 24,
             gap: 10,
           }}
         >

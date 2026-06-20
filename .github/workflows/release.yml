@@ -128,10 +128,11 @@ jobs:
         shell: bash
         env:
           PINFLOW_PY_ARCH: ${{ matrix.py-arch }}
-          # macOS: sign the sidecar's nested Mach-O with the Developer ID just
-          # imported (keep in lockstep with tauri.signing.conf.json). Empty/unset
-          # elsewhere → build_sidecar.sh ad-hoc signs (or no-ops off macOS).
-          PINFLOW_MAC_SIGN_IDENTITY: "${{ runner.os == 'macOS' && 'Developer ID Application: Siddharth Kothari (8RY4V8V3Y6)' || '' }}"
+          # macOS: sign the sidecar's nested Mach-O with the Developer ID (from the
+          # APPLE_SIGNING_IDENTITY secret — kept out of source). Empty elsewhere, or
+          # when the secret is absent → build_sidecar.sh ad-hoc signs (or no-ops off
+          # macOS). Generated tauri.signing.conf.json below uses the same value.
+          PINFLOW_MAC_SIGN_IDENTITY: "${{ runner.os == 'macOS' && secrets.APPLE_SIGNING_IDENTITY || '' }}"
         run: bash scripts/build_sidecar.sh
 
       # Fail fast on per-OS packaging gaps before the long Tauri bundle step.
@@ -150,6 +151,26 @@ jobs:
           echo "${{ secrets.APPLE_API_KEY_P8 }}" | base64 --decode > "$KEY_PATH"
           echo "APPLE_API_KEY_PATH=$KEY_PATH" >> "$GITHUB_ENV"
 
+      # Generate the macOS signing overlay from the APPLE_SIGNING_IDENTITY secret
+      # rather than committing the Developer ID string (it names an individual, so
+      # we keep it out of the public source tree). The file is what overrides the
+      # base tauri.conf.json's signingIdentity "-" (ad-hoc) for release builds; it
+      # is gitignored. Falls back to "-" when the secret is absent (e.g. a dispatch
+      # dry-run without environment access) so the build still succeeds unsigned.
+      - name: Generate macOS signing config
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          ID="${{ secrets.APPLE_SIGNING_IDENTITY }}"
+          [ -z "$ID" ] && ID="-"
+          cat > apps/desktop/src-tauri/tauri.signing.conf.json <<EOF
+          {
+            "\$schema": "https://schema.tauri.app/config/2",
+            "bundle": { "macOS": { "signingIdentity": "$ID" } }
+          }
+          EOF
+          echo "wrote tauri.signing.conf.json (identity sourced from secret)"
+
       # On a tag: create/append a draft GitHub Release with the installers.
       # On manual dispatch: tagName is empty, so tauri-action only builds.
       - name: Build app (and release on tag)
@@ -158,10 +179,10 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           # macOS-only; harmlessly empty/ignored on Windows + Linux legs.
           # The Developer ID cert is already in the keychain (Import step above),
-          # so tauri build signs the outer .app with the identity from
-          # tauri.signing.conf.json — no APPLE_CERTIFICATE here (that would make
-          # tauri-action create a second, competing keychain). Notarization runs
-          # via the App Store Connect API key (APPLE_API_KEY_PATH exported above):
+          # so tauri build signs the outer .app with the identity from the
+          # generated tauri.signing.conf.json — no APPLE_CERTIFICATE here (that
+          # would make tauri-action create a second, competing keychain).
+          # Notarization runs via the App Store Connect API key (path exported above):
           APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
           APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
         with:

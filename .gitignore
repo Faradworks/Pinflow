@@ -91,3 +91,6 @@ apps/desktop/src-tauri/binaries/
 # never in the repo (see .github/workflows/release.yml).
 *.p12
 *.p8
+
+# Generated at CI build time from the APPLE_SIGNING_IDENTITY secret (zero-PII source).
+apps/desktop/src-tauri/tauri.signing.conf.json

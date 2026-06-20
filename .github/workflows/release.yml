@@ -17,6 +17,14 @@ permissions:
 jobs:
   build:
     name: ${{ matrix.label }}
+    # Real releases (tag pushes) run in the protected `release` environment so the
+    # Apple signing secrets are gated behind required-reviewer approval. Manual
+    # `workflow_dispatch` dry-runs use no environment (ungated, unsigned).
+    # NOTE: environment protection rules are free on PUBLIC repos / paid private
+    # plans only — on a free private repo this label is inert (no gating). Move the
+    # APPLE_* secrets to `release` *environment* secrets (and off repo scope) on the
+    # public repo for the gate to actually bite.
+    environment: ${{ github.ref_type == 'tag' && 'release' || '' }}
     strategy:
       fail-fast: false
       matrix:
@@ -28,7 +36,7 @@ jobs:
           - label: macos-arm64
             os: macos-14
             rust-target: aarch64-apple-darwin
-            tauri-args: "--target aarch64-apple-darwin --bundles app,dmg --config src-tauri/tauri.bundle.conf.json"
+            tauri-args: "--target aarch64-apple-darwin --bundles app,dmg --config src-tauri/tauri.bundle.conf.json --config src-tauri/tauri.signing.conf.json"
             py-arch: ""
           # Intel macOS is cross-built on an Apple Silicon runner (Rust target +
           # an x86_64 PyInstaller sidecar via Rosetta 2) to avoid GitHub's scarce
@@ -36,7 +44,7 @@ jobs:
           - label: macos-x64
             os: macos-14
             rust-target: x86_64-apple-darwin
-            tauri-args: "--target x86_64-apple-darwin --bundles app,dmg --config src-tauri/tauri.bundle.conf.json"
+            tauri-args: "--target x86_64-apple-darwin --bundles app,dmg --config src-tauri/tauri.bundle.conf.json --config src-tauri/tauri.signing.conf.json"
             py-arch: "x86_64"
           - label: windows-x64
             os: windows-latest
@@ -95,6 +103,18 @@ jobs:
 
       - uses: astral-sh/setup-uv@v5
 
+      # Import the Developer ID cert into a keychain BEFORE the sidecar build, so
+      # build_sidecar.sh can sign the nested Mach-O files (.so/.dylib + launcher)
+      # with it. Notarization requires every nested binary to carry a Developer ID
+      # signature + secure timestamp; tauri-action only signs the outer .app, so
+      # the sidecar must be signed here. Same cert tauri-action uses for the .app.
+      - name: Import Developer ID certificate
+        if: runner.os == 'macOS'
+        uses: apple-actions/import-codesign-certs@v3
+        with:
+          p12-file-base64: ${{ secrets.APPLE_CERTIFICATE }}
+          p12-password: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+
       # The Intel sidecar is an x86_64 binary built on this arm64 runner; it runs
       # (build + smoke test) under Rosetta 2. Pre-installed on the image, but be
       # explicit so the leg fails loudly rather than mysteriously if it's absent.
@@ -108,6 +128,11 @@ jobs:
         shell: bash
         env:
           PINFLOW_PY_ARCH: ${{ matrix.py-arch }}
+          # macOS: sign the sidecar's nested Mach-O with the Developer ID (from the
+          # APPLE_SIGNING_IDENTITY secret — kept out of source). Empty elsewhere, or
+          # when the secret is absent → build_sidecar.sh ad-hoc signs (or no-ops off
+          # macOS). Generated tauri.signing.conf.json below uses the same value.
+          PINFLOW_MAC_SIGN_IDENTITY: "${{ runner.os == 'macOS' && secrets.APPLE_SIGNING_IDENTITY || '' }}"
         run: bash scripts/build_sidecar.sh
 
       # Fail fast on per-OS packaging gaps before the long Tauri bundle step.
@@ -115,12 +140,51 @@ jobs:
         shell: bash
         run: bash scripts/smoke_sidecar.sh
 
+      # macOS notarization. Write the App Store Connect API key (.p8) to disk from
+      # a base64 secret and hand tauri-action its path. (The Developer ID cert was
+      # imported into the keychain by the "Import Developer ID certificate" step
+      # above; the signing identity comes from the generated tauri.signing.conf.json.)
+      - name: Set up notarization API key
+        if: runner.os == 'macOS'
+        run: |
+          KEY_PATH="$RUNNER_TEMP/apple_api_key.p8"
+          echo "${{ secrets.APPLE_API_KEY_P8 }}" | base64 --decode > "$KEY_PATH"
+          echo "APPLE_API_KEY_PATH=$KEY_PATH" >> "$GITHUB_ENV"
+
+      # Generate the macOS signing overlay from the APPLE_SIGNING_IDENTITY secret
+      # rather than committing the Developer ID string (it names an individual, so
+      # we keep it out of the public source tree). The file is what overrides the
+      # base tauri.conf.json's signingIdentity "-" (ad-hoc) for release builds; it
+      # is gitignored. Falls back to "-" when the secret is absent (e.g. a dispatch
+      # dry-run without environment access) so the build still succeeds unsigned.
+      - name: Generate macOS signing config
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          ID="${{ secrets.APPLE_SIGNING_IDENTITY }}"
+          [ -z "$ID" ] && ID="-"
+          cat > apps/desktop/src-tauri/tauri.signing.conf.json <<EOF
+          {
+            "\$schema": "https://schema.tauri.app/config/2",
+            "bundle": { "macOS": { "signingIdentity": "$ID" } }
+          }
+          EOF
+          echo "wrote tauri.signing.conf.json (identity sourced from secret)"
+
       # On a tag: create/append a draft GitHub Release with the installers.
       # On manual dispatch: tagName is empty, so tauri-action only builds.
       - name: Build app (and release on tag)
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # macOS-only; harmlessly empty/ignored on Windows + Linux legs.
+          # The Developer ID cert is already in the keychain (Import step above),
+          # so tauri build signs the outer .app with the identity from the
+          # generated tauri.signing.conf.json — no APPLE_CERTIFICATE here (that
+          # would make tauri-action create a second, competing keychain).
+          # Notarization runs via the App Store Connect API key (path exported above):
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
         with:
           projectPath: apps/desktop
           tagName: ${{ github.ref_type == 'tag' && github.ref_name || '' }}

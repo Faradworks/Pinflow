@@ -39,7 +39,15 @@ fi
 
 echo "==> create build venv (uv, Python: $PY_REQUEST)"
 cd "$API"
-uv venv --clear "$VENV" --python "$PY_REQUEST"
+# --python-preference only-managed forces uv to use a relocatable
+# python-build-standalone interpreter rather than whatever Python the host
+# happens to have. This is load-bearing on macOS arm64: a bare "3.12" lets uv
+# pick the runner's *framework* Python, which makes PyInstaller embed a
+# Python.framework whose code signature Apple notarization rejects. The managed
+# standalone ships a loose libpython dylib instead (same shape the x86_64 cross
+# leg already used and notarizes cleanly), so every nested Mach-O is a plain file
+# the signing pass below covers. Also makes the build reproducible across hosts.
+uv venv --clear "$VENV" --python "$PY_REQUEST" --python-preference only-managed
 # Force a prebuilt cryptography wheel. On the cross-arch path (x86_64 interpreter
 # under Rosetta on an arm64 runner) uv otherwise falls back to a source build,
 # which drags in maturin + a Rust openssl-sys compile that fails for lack of
@@ -64,20 +72,43 @@ rm -rf "$BIN/pinflow-api"
 mkdir -p "$BIN"
 cp -R "$API/dist/pinflow-api" "$BIN/pinflow-api"
 
-# Ad-hoc codesign the staged sidecar on macOS (we don't have an Apple Developer
-# cert yet — `-` is the ad-hoc identity, no account required). Without this, the
-# nested Mach-O files are unsigned: on Apple Silicon the kernel kills the spawned
+# Codesign the staged sidecar's nested Mach-O files on macOS. Without this, the
+# nested binaries are unsigned: on Apple Silicon the kernel kills the spawned
 # `pinflow-api` launcher and dyld rejects the dlopen'd .so/.dylib files, so the
 # app boots to a dead backend. The launcher must be signed AFTER its nested
-# libraries so the seal covers them. The outer .app is signed separately —
-# `tauri build`/tauri-action via bundle.macOS.signingIdentity "-" in CI, and a
-# `--deep` re-sign in scripts/build_desktop.sh locally. Remove the ad-hoc path
-# (here + that config key) once notarization with a real Developer ID lands.
+# libraries so the seal covers them.
+#
+# Identity is chosen by PINFLOW_MAC_SIGN_IDENTITY:
+#   - unset / "-"  → ad-hoc (local `build_desktop.sh`, no Apple account needed).
+#   - a Developer ID → real signing with hardened runtime + a secure timestamp,
+#     which is what Apple notarization requires of EVERY nested Mach-O (the
+#     outer .app is signed + notarized separately by tauri-action). The release
+#     workflow imports the cert and sets this before calling us (see
+#     .github/workflows/release.yml). codesign finds the identity in the keychain
+#     that step set up.
 if [[ "$(uname -s)" == "Darwin" ]]; then
-  echo "==> ad-hoc codesign the staged sidecar (no Apple Developer cert yet)"
-  find "$BIN/pinflow-api" -type f \( -name '*.so' -o -name '*.dylib' \) \
-    -exec codesign --force --sign - --timestamp=none {} +
-  codesign --force --sign - --timestamp=none "$BIN/pinflow-api/pinflow-api"
+  SIGN_ID="${PINFLOW_MAC_SIGN_IDENTITY:--}"
+  if [[ "$SIGN_ID" == "-" ]]; then
+    echo "==> ad-hoc codesign the staged sidecar (no Developer ID identity set)"
+    sign_opts=(--force --sign - --timestamp=none)
+  else
+    echo "==> Developer ID codesign the staged sidecar ($SIGN_ID)"
+    sign_opts=(--force --options runtime --timestamp --sign "$SIGN_ID")
+  fi
+  launcher="$BIN/pinflow-api/pinflow-api"
+  # Every nested Mach-O must be signed for notarization — not just *.so/*.dylib.
+  # PyInstaller also ships an extensionless libpython dylib and other binaries, so
+  # detect Mach-O by content rather than by suffix. The managed standalone Python
+  # (forced above) produces only loose dylibs — no Python.framework to special-
+  # case (a versioned framework's bundle seal is notoriously fiddly to sign right;
+  # we sidestep it entirely by not embedding one). -type f skips symlinks so each
+  # real binary is signed once; the launcher is signed last so its seal covers
+  # the onedir tree.
+  while IFS= read -r -d '' f; do
+    [[ "$f" == "$launcher" ]] && continue
+    file -b "$f" | grep -q 'Mach-O' && codesign "${sign_opts[@]}" "$f"
+  done < <(find "$BIN/pinflow-api" -type f -print0)
+  codesign "${sign_opts[@]}" "$launcher"
 fi
 
 echo "==> sidecar staged at $BIN/pinflow-api"

@@ -30,6 +30,35 @@ merged in with `tauri build --config …`. It's kept out of the base
 fail on the missing resource. The local equivalent of a release build is
 [`scripts/build_desktop.sh`](../scripts/build_desktop.sh).
 
+## macOS code signing + notarization
+
+The macOS legs are signed with a **Developer ID Application** certificate and
+notarized by Apple, so downloaded builds open without Gatekeeper warnings. The
+sidecar's nested Mach-O binaries are signed (hardened runtime + secure
+timestamp) before `tauri build` signs the outer `.app`; `tauri-action` then
+submits to the notary service and staples the ticket.
+
+This needs the following **repository secrets** (set under Settings → Secrets
+and variables → Actions):
+
+| Secret | What it is |
+| --- | --- |
+| `APPLE_CERTIFICATE` | base64 of the Developer ID Application `.p12` |
+| `APPLE_CERTIFICATE_PASSWORD` | password for that `.p12` |
+| `APPLE_SIGNING_IDENTITY` | `Developer ID Application: <Name> (<TEAMID>)` |
+| `APPLE_API_KEY_P8` | base64 of the App Store Connect API key `.p8` |
+| `APPLE_API_ISSUER` | App Store Connect API issuer UUID |
+| `APPLE_API_KEY` | App Store Connect API key ID |
+
+The signing identity is read from the secret (not committed); the macOS signing
+config is generated at build time and falls back to ad-hoc signing when the
+secret is absent, so dry-run builds without secret access still succeed
+(unsigned). When the repo is public (or on a paid plan), move these into a
+`release` **environment** with a required reviewer to gate the cert behind
+approval — the workflow already runs tag builds in that environment.
+
+> Windows is not yet Authenticode-signed (see Deferred).
+
 ## Cut a release
 
 1. Bump the version in `apps/desktop/src-tauri/tauri.conf.json` (the source of
@@ -53,28 +82,18 @@ Use the **Run workflow** button (Actions → Release → Run workflow) on any
 branch. It builds every OS and uploads the installers as **workflow artifacts**
 (downloadable from the run summary) without creating a release.
 
-## Unsigned builds — first-launch warnings
+## First-launch warnings
 
-These installers are **not yet code-signed or notarized**, so the OS will warn
-on first launch:
-
-- **macOS** — "Pinflow can't be opened because Apple cannot check it for
-  malicious software." Right-click the app → **Open** (once), or clear the
-  quarantine flag:
-
-  ```bash
-  xattr -dr com.apple.quarantine /Applications/Pinflow.app
-  ```
-
-- **Windows** — SmartScreen shows "Windows protected your PC." Click **More
-  info → Run anyway**.
-
+- **macOS** — signed + notarized (see above): opens with no warning. A build
+  produced without the signing secrets (e.g. a fork dry-run) is unsigned —
+  right-click the app → **Open** (once), or `xattr -dr com.apple.quarantine
+  /Applications/Pinflow.app`.
+- **Windows** — not yet Authenticode-signed, so SmartScreen shows "Windows
+  protected your PC." Click **More info → Run anyway**.
 - **Linux** — no warning; `chmod +x` the AppImage if your file manager hasn't.
 
 ## Deferred (future work)
 
-- **macOS Developer ID signing + notarization** and **Windows Authenticode** —
-  `tauri-action` supports both via repo secrets (`APPLE_CERTIFICATE`,
-  `APPLE_ID`, `APPLE_TEAM_ID`, … / Windows cert). Drop them in and the
-  first-launch warnings go away.
+- **Windows Authenticode signing** — to clear the SmartScreen warning
+  (`tauri-action` supports a Windows cert via secrets).
 - **Auto-updater** — Tauri's updater plugin + signed update artifacts.

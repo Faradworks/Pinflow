@@ -23,6 +23,8 @@ struct Sidecar(Mutex<Option<Child>>);
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
+        // Native folder picker for the KiCad symbol-library override in Settings.
+        .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
             // Dev runs the backend out-of-process (scripts/dev.sh → uvicorn), and
             // the sidecar isn't bundled, so there's nothing to spawn or reap here.

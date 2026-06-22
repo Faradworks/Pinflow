@@ -21,6 +21,7 @@ and grows it as needed.
 
 from __future__ import annotations
 
+import math
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
@@ -32,12 +33,22 @@ from pinflow_api.emit import bbox
 
 PAGE_W = 297.0     # A4 landscape, mm
 PAGE_H = 210.0
-MARGIN = 10.0      # page-edge safety margin
+MARGIN = 10.0      # KiCad's default drawing-sheet border inset from page edge
+BUFFER = 5.0       # gap between that border and a block's frame, so they don't touch
 PAD = 5.0          # gutter between blocks
 FRAME_PAD = 3.0    # extra space between contents and frame rectangle
 TITLE_BAND = 4.0   # extra height reserved inside the frame top for the label
 COMP_HALF = 10.0   # fallback half-extent when a component can't be measured
 GRID = 2.54        # KiCad standard grid
+
+# How far `draw_frame`'s rectangle overhangs the block content: FRAME_PAD on
+# the left/right/bottom, FRAME_PAD + TITLE_BAND on top (the title band). The
+# frame is drawn after placement, so placement must reserve this room to keep
+# the frame — not just the content — inside the MARGIN border.
+_FRAME_LEFT = FRAME_PAD
+_FRAME_TOP = FRAME_PAD + TITLE_BAND
+_FRAME_RIGHT = FRAME_PAD
+_FRAME_BOTTOM = FRAME_PAD
 
 # KiCad standard sheet sizes, landscape orientation: (name, width, height) mm,
 # smallest first. When a new block won't fit the current sheet, placement grows
@@ -83,11 +94,17 @@ class BBox:
         return self.ymax - self.ymin
 
 
-def _snap(v: float) -> float:
-    return round(v / GRID) * GRID
+def _snap_up(v: float) -> float:
+    """Grid-snap toward +∞. Used for placement translations so a block lands
+    *at least* its target offset from the page border / existing content —
+    nearest-rounding could pull it ~half a grid back into the buffer it's
+    meant to clear (measured bbox edges aren't grid-aligned)."""
+    return math.ceil(v / GRID) * GRID
 
 
-def compute_bbox(sch: ksa.Schematic) -> BBox | None:
+def compute_bbox(
+    sch: ksa.Schematic, *, include_rectangles: bool = True
+) -> BBox | None:
     """Bounding box over all visible elements; None if the schematic is empty.
 
     Component extents come from `emit.bbox.measured_bbox` (symbol + pins +
@@ -101,6 +118,14 @@ def compute_bbox(sch: ksa.Schematic) -> BBox | None:
     them, not through them. Only when a component can't be measured
     (geometry unresolved) do we fall back to the old ±COMP_HALF
     approximation around its centre.
+
+    `include_rectangles=False` excludes those drawn frames. A frame sits
+    `FRAME_PAD + TITLE_BAND` *above* its block's content, so the full bbox's
+    top edge is a frame, not real content. Top-aligning a new block to that
+    edge (then drawing its own frame another band higher) makes every block
+    creep up ~7 mm from the last — the frame-exclusive top is the stable
+    anchor that kills the staircase. Horizontal packing still uses the full
+    bbox so blocks don't overlap each other's frames.
     """
     xs: list[float] = []
     ys: list[float] = []
@@ -144,7 +169,7 @@ def compute_bbox(sch: ksa.Schematic) -> BBox | None:
     # `add_rectangle` stores into `_data["rectangles"]`; there's no public
     # accessor on `ksa.Schematic` (the `list_all_graphics` shortcut reads
     # the singular key and misses additions — known ksa quirk).
-    for rect in sch._data.get("rectangles", []) or []:
+    for rect in (sch._data.get("rectangles", []) or []) if include_rectangles else []:
         start = rect.get("start") or {}
         end = rect.get("end") or {}
         try:
@@ -164,6 +189,8 @@ def compute_placement(
     existing: BBox | None,
     new: BBox,
     page_w: float = PAGE_W,
+    *,
+    existing_top: float | None = None,
 ) -> tuple[float, float, bool]:
     """Return (dx, dy, wrapped) — translation to apply to the new block.
 
@@ -171,22 +198,47 @@ def compute_placement(
     row below it when that would cross the right margin of a `page_w`-wide
     sheet. The *height* bound is enforced by the caller (`_fit_page`), which
     grows the sheet when no row fits — so a block never silently runs off the
-    bottom edge."""
+    bottom edge.
+
+    `existing_top` is the existing content's top edge measured WITHOUT the
+    drawn title frames (`compute_bbox(..., include_rectangles=False).ymin`).
+    Right-packed blocks top-align to it instead of `existing.ymin`, because
+    `existing.ymin` is a frame edge sitting `FRAME_PAD + TITLE_BAND` above real
+    content — aligning to that and then drawing a fresh frame another band
+    higher makes every block staircase up ~7 mm from the last (and eventually
+    off the top edge). The frame-free top is stable, so blocks stay aligned.
+    Falls back to `existing.ymin` (floored at the frame inset) when not given.
+
+    Anchors reserve the block's own frame overhang inside the MARGIN border:
+    content starts at `MARGIN + _FRAME_LEFT` / `MARGIN + _FRAME_TOP`, so the
+    frame `draw_frame` later adds lands on the border rather than poking
+    outside KiCad's drawing sheet."""
+    left_anchor = MARGIN + BUFFER + _FRAME_LEFT
+    top_anchor = MARGIN + BUFFER + _FRAME_TOP
+    right_limit = page_w - MARGIN - BUFFER
     if existing is None:
-        target_x = MARGIN
-        target_y = MARGIN
+        target_x = left_anchor
+        target_y = top_anchor
         wrapped = False
     else:
-        target_x = existing.xmax + PAD
-        target_y = existing.ymin
-        if target_x + new.w > page_w - MARGIN:
-            target_x = MARGIN
-            target_y = existing.ymax + PAD
+        anchor_top = existing_top if existing_top is not None else existing.ymin
+        # existing.xmax/ymax are the neighbors' FRAME edges (compute_bbox counts
+        # drawn frames), but target_x/y position the new block's CONTENT. The
+        # new block draws its own frame _FRAME_LEFT left / _FRAME_TOP above its
+        # content, so add that leading overhang to keep the PAD gutter measured
+        # frame-to-frame; without it the new frame pokes back into the neighbor
+        # by (_FRAME − PAD) and the boxes collide.
+        target_x = existing.xmax + PAD + _FRAME_LEFT
+        target_y = max(top_anchor, anchor_top)
+        # Wrap when the block + its frame would cross the right border buffer.
+        if target_x + new.w + _FRAME_RIGHT > right_limit:
+            target_x = left_anchor
+            target_y = existing.ymax + PAD + _FRAME_TOP
             wrapped = True
         else:
             wrapped = False
-    dx = _snap(target_x - new.xmin)
-    dy = _snap(target_y - new.ymin)
+    dx = _snap_up(target_x - new.xmin)
+    dy = _snap_up(target_y - new.ymin)
     return dx, dy, wrapped
 
 
@@ -194,32 +246,46 @@ def _fit_page(
     existing: BBox | None,
     new: BBox,
     start_paper: str,
+    *,
+    existing_top: float | None = None,
 ) -> tuple[str, float, float, bool]:
-    """Pick the smallest standard sheet (≥ the current one) on which the new
-    block fits beside the existing content, plus the placement to use there.
+    """Pick the smallest standard sheet (≥ the current one) that contains the
+    new block once it's packed beside the existing content, plus the placement.
 
     Returns (paper_name, dx, dy, wrapped). Grows the sheet up `_PAPER_LADDER`
     rather than letting a block spill off the page; never shrinks below the
     current size. If nothing fits even at A0, places on A0 best-effort. The
     width/height fit is checked against the *union* of existing + placed, so a
     sheet that's already overflowing (from a prior off-page placement) gets
-    grown enough to contain everything."""
+    grown enough to contain everything.
+
+    Packing uses the **current** page width, not each candidate width, so a
+    block that runs past the right margin WRAPS to a new row. Feeding the
+    candidate width into `compute_placement` instead (the old behavior) widened
+    the wrap threshold on every rung, so a block never wrapped — the sheet just
+    ballooned sideways to keep one long row (e.g. four tall blocks → an A1 sheet
+    with content crammed into a top strip). Wrap first, then grow only as far as
+    the wrapped layout needs."""
     start_w, start_h = _page_dims(start_paper)
     ladder = [(n, w, h) for n, w, h in _PAPER_LADDER if w >= start_w and h >= start_h]
     if not ladder:  # current sheet already ≥ A0 (or unknown-huge): keep it
         ladder = [(start_paper, start_w, start_h)]
 
+    dx, dy, wrapped = compute_placement(
+        existing, new, start_w, existing_top=existing_top
+    )
+    # Reserve the new block's frame overhang on the right/bottom too, so the
+    # frame stays inside the MARGIN border (existing.xmax/ymax already include
+    # prior blocks' drawn frames).
+    placed_xmax = new.xmax + dx + _FRAME_RIGHT
+    placed_ymax = new.ymax + dy + _FRAME_BOTTOM
+    union_xmax = max(existing.xmax, placed_xmax) if existing else placed_xmax
+    union_ymax = max(existing.ymax, placed_ymax) if existing else placed_ymax
     for name, pw, ph in ladder:
-        dx, dy, wrapped = compute_placement(existing, new, pw)
-        placed_xmax = new.xmax + dx
-        placed_ymax = new.ymax + dy
-        union_xmax = max(existing.xmax, placed_xmax) if existing else placed_xmax
-        union_ymax = max(existing.ymax, placed_ymax) if existing else placed_ymax
-        if union_xmax <= pw - MARGIN and union_ymax <= ph - MARGIN:
+        if union_xmax <= pw - MARGIN - BUFFER and union_ymax <= ph - MARGIN - BUFFER:
             return name, dx, dy, wrapped
 
     name, pw, ph = ladder[-1]
-    dx, dy, wrapped = compute_placement(existing, new, pw)
     return name, dx, dy, wrapped
 
 
@@ -394,12 +460,19 @@ def merge_subcircuit(
         tmp.unlink(missing_ok=True)
 
     existing_bbox = compute_bbox(target_sch)
+    # Frame-free top for vertical alignment: the prior blocks' title frames
+    # sit a band above their content, so aligning to them staircases each new
+    # block upward (see `compute_placement`/`compute_bbox`).
+    existing_content = compute_bbox(target_sch, include_rectangles=False)
+    existing_top = existing_content.ymin if existing_content else None
     new_bbox = compute_bbox(new_sch)
     if new_bbox is None:
         return {"dx": 0.0, "dy": 0.0, "wrapped": False, "skipped": True}
 
     start_paper = _read_paper(target_sch)
-    paper, dx, dy, wrapped = _fit_page(existing_bbox, new_bbox, start_paper)
+    paper, dx, dy, wrapped = _fit_page(
+        existing_bbox, new_bbox, start_paper, existing_top=existing_top
+    )
     if paper != start_paper:
         _set_paper(target_sch, paper)
     translate_schematic(new_sch, dx, dy)

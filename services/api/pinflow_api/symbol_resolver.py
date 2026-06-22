@@ -18,13 +18,20 @@ import re
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal, NamedTuple, Optional
 
+from . import kicad_paths
 from .easyeda import EasyedaSymbol, cache_dir as _easyeda_cache_dir, fetch_lcsc_symbol
 
 if TYPE_CHECKING:
     from .graph.models import DesignGraph
 
-# macOS KiCad 10 bundled libs. Same hardcoded path as sym_lib.py — generalize together.
-_BUNDLED_SYMS = Path("/Applications/KiCad/KiCad.app/Contents/SharedSupport/symbols")
+
+def _bundled_syms() -> Path:
+    """Resolved KiCad symbol-library directory (override-aware, cross-platform).
+
+    Read through `kicad_paths` so a user-set override (POST /kicad/symbol-library)
+    is honored. `_index` is lru_cached and cleared when the override changes.
+    """
+    return kicad_paths.symbol_lib_dir()
 
 
 class ResolvedSymbol(NamedTuple):
@@ -43,9 +50,10 @@ _UNIT_SUFFIX = re.compile(r"_\d+_\d+$")
 def _index() -> dict[str, str]:
     """Map upper-cased symbol name → first lib_id encountered."""
     out: dict[str, str] = {}
-    if not _BUNDLED_SYMS.is_dir():
+    bundled = _bundled_syms()
+    if not bundled.is_dir():
         return out
-    for lib_file in sorted(_BUNDLED_SYMS.glob("*.kicad_sym")):
+    for lib_file in sorted(bundled.glob("*.kicad_sym")):
         try:
             text = lib_file.read_text()
         except Exception:
@@ -157,7 +165,7 @@ def _locate_lib_id(
         return None
     needle = f'(symbol "{symbol_name}"'
 
-    bundled = _BUNDLED_SYMS / f"{library}.kicad_sym"
+    bundled = _bundled_syms() / f"{library}.kicad_sym"
     if _file_contains(bundled, needle):
         return ResolvedSymbol(lib_id=lib_id, extra_lib_path=None, source="bundled")
 

@@ -52,6 +52,14 @@ export type ActiveProject =
       highlighted: boolean;
     };
 
+export type SymbolLibraryStatus = {
+  dir: string;
+  exists: boolean;
+  symbol_count: number;
+  override: string | null;
+  defaults: string[];
+};
+
 export type StagePayload = {
   schematic_path: string;
   source: string;
@@ -128,6 +136,16 @@ export const api = {
 
   async detectActiveProject(): Promise<ActiveProject> {
     return get<ActiveProject>("/kicad/active-project");
+  },
+
+  async getSymbolLibrary(): Promise<SymbolLibraryStatus> {
+    return get<SymbolLibraryStatus>("/kicad/symbol-library");
+  },
+
+  /** Set the symbol-library directory override; pass null/empty to revert to
+   *  the platform default. Rejects (throws) on a non-existent / wrong dir. */
+  async setSymbolLibrary(dir: string | null): Promise<SymbolLibraryStatus> {
+    return post<SymbolLibraryStatus>("/kicad/symbol-library", { dir });
   },
 
   async stageSchematic(schematicPath: string): Promise<StagePayload> {

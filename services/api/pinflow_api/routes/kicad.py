@@ -5,7 +5,7 @@ from pydantic import BaseModel
 
 from typing import Optional
 
-from pinflow_api import staging
+from pinflow_api import kicad_paths, staging
 from pinflow_api.builders import lib_id_for
 from pinflow_api.kicad_detect import detect
 from pinflow_api.sym_lib import (
@@ -87,6 +87,46 @@ def _read_text_safe(p: Path) -> Optional[str]:
         return p.read_text(encoding="utf-8") if p.is_file() else None
     except (OSError, UnicodeDecodeError):
         return None
+
+
+class SymbolLibraryRequest(BaseModel):
+    # Absolute path to a directory of `.kicad_sym` files. Empty/null clears the
+    # override and reverts to the platform default.
+    dir: Optional[str] = None
+
+
+@router.get("/symbol-library")
+def symbol_library() -> dict:
+    """Report the resolved KiCad symbol-library directory + whether it exists.
+
+    Powers the settings UI so the user can see where Pinflow is looking for
+    symbols and point it elsewhere when their libraries aren't found.
+    """
+    return kicad_paths.symbol_lib_status()
+
+
+@router.post("/symbol-library")
+def set_symbol_library(req: SymbolLibraryRequest) -> dict:
+    """Set (or clear) the symbol-library directory override.
+
+    Validates that a non-empty path is an existing directory holding at least
+    one `.kicad_sym` file before persisting — a wrong directory is the whole
+    problem this is meant to fix, so we don't let the user save one.
+    """
+    raw = (req.dir or "").strip()
+    if raw:
+        p = Path(raw).expanduser()
+        if not p.is_dir():
+            raise HTTPException(status_code=400, detail=f"not a directory: {raw}")
+        if not any(p.glob("*.kicad_sym")):
+            raise HTTPException(
+                status_code=400,
+                detail=f"no .kicad_sym files in {raw} — is this KiCad's symbols directory?",
+            )
+        kicad_paths.set_symbol_lib_override(str(p))
+    else:
+        kicad_paths.set_symbol_lib_override(None)
+    return kicad_paths.symbol_lib_status()
 
 
 class InstallSymbolRequest(BaseModel):

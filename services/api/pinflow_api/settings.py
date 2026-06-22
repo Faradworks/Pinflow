@@ -20,6 +20,12 @@ class Settings(BaseSettings):
 
     anthropic_api_key: str = ""
     anthropic_model: str = "claude-sonnet-4-6"
+
+    # Override for KiCad's bundled symbol-library directory. Empty → use the
+    # platform default (see kicad_paths.py). A runtime override set via the UI
+    # (POST /kicad/symbol-library) is persisted separately in local_config and
+    # takes precedence over this env value.
+    kicad_symbol_dir: str = ""
     # The chat agent loop (routes/agent.py -> agent/loop.py) is the hero path and
     # benefits from a stronger reasoner: it must author netlists that satisfy the
     # deterministic placer/validator in as few attempts as possible, or it burns

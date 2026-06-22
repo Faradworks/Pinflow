@@ -7,6 +7,7 @@ import type { CSSProperties } from "react";
 
 import { getConfig, saveConfig, type PinflowConfig } from "../../lib/config";
 import { primaryButtonStyle } from "./OnboardingScreen";
+import { SymbolLibrarySettings } from "./SymbolLibrarySettings";
 import {
   ProviderForm,
   configToDraft,
@@ -110,6 +111,8 @@ export function SettingsModal({
           onKeyInvalidChange={setKeyInvalid}
           serverLlmDisabled={serverLlmDisabled}
         />
+
+        <SymbolLibrarySettings />
 
         {blocker && (
           <div

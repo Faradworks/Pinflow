@@ -11,12 +11,9 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
+from . import kicad_paths
 from .builders._common import _matching_close
 from .easyeda import cache_dir as _easyeda_cache_dir
-
-# macOS KiCad 10 bundled symbol library path. Hardcoded for this milestone;
-# generalize when we support other platforms / KiCad installations.
-_BUNDLED_SYMS = Path("/Applications/KiCad/KiCad.app/Contents/SharedSupport/symbols")
 
 _LIB_HEADER = (
     "(kicad_symbol_lib\n"
@@ -38,7 +35,7 @@ def extract_symbol_text(lib_id: str) -> str:
     if not library or not symbol_name:
         raise ValueError(f"invalid lib_id {lib_id!r}, expected <library>:<symbol>")
     candidates = [
-        _BUNDLED_SYMS / f"{library}.kicad_sym",
+        kicad_paths.symbol_lib_dir() / f"{library}.kicad_sym",
         _easyeda_cache_dir() / f"{library}.kicad_sym",
     ]
     src = next((p for p in candidates if p.is_file()), None)

@@ -75,7 +75,12 @@ app and the API. The project is linked from **this directory** (`.vercel/` here,
 gitignored), so deploys only ever upload `apps/docs` — the rest of the monorepo
 is invisible to it.
 
-Deploy a new production build from `apps/docs`:
+**Git auto-deploy.** The project is connected to the `Faradworks/Pinflow` GitHub
+repo with **Root Directory = `apps/docs`**, so pushes to `main` deploy to
+production and pull requests get preview URLs automatically. No manual step is
+needed for a normal release.
+
+To deploy manually from `apps/docs` (e.g. a one-off build outside the git flow):
 
 ```bash
 vercel deploy --prod        # builds remotely; Pagefind search indexed at build
@@ -92,7 +97,3 @@ A   docs.pinflow.faradworks.com   76.76.21.21
 (A `CNAME` to `cname.vercel-dns.com` also works; the A record matches the
 existing zone pattern.) Vercel auto-verifies and issues SSL once it resolves.
 
-**Git auto-deploy (optional, later).** Currently deploys are CLI-driven. To get
-push-to-deploy + PR previews, connect the project to the `Faradworks/Pinflow`
-GitHub repo and set **Root Directory = `apps/docs`** (do this after `apps/docs`
-lands on `main`).

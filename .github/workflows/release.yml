@@ -17,13 +17,10 @@ permissions:
 jobs:
   build:
     name: ${{ matrix.label }}
-    # Real releases (tag pushes) run in the protected `release` environment so the
-    # Apple signing secrets are gated behind required-reviewer approval. Manual
-    # `workflow_dispatch` dry-runs use no environment (ungated, unsigned).
-    # NOTE: environment protection rules are free on PUBLIC repos / paid private
-    # plans only — on a free private repo this label is inert (no gating). Move the
-    # APPLE_* secrets to `release` *environment* secrets (and off repo scope) on the
-    # public repo for the gate to actually bite.
+    # Real releases (tag pushes) run in the protected `release` environment, where
+    # the Apple signing secrets live as environment secrets gated behind
+    # required-reviewer approval. Manual `workflow_dispatch` dry-runs use no
+    # environment (ungated, unsigned).
     environment: ${{ github.ref_type == 'tag' && 'release' || '' }}
     strategy:
       fail-fast: false

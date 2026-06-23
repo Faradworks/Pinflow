@@ -40,6 +40,7 @@ from pinflow_api.emit.route import (
     _interior,
     count_crossings,
     count_overlaps,
+    junctions_for,
     route_nets,
 )
 from pinflow_api.emit.classify import LayoutPlan, NetKind, Role, classify
@@ -1215,29 +1216,46 @@ def _wire_router(
     rail_y_hints: dict[str, float] | None = None,
     keepouts: list[tuple[float, float, float, float]] | None = None,
     bodies: list[tuple[float, float, float, float]] | None = None,
+    stub: float = _WIRE_STUB,
 ) -> list:
     """Route the IC-touching nets with the crossing-minimising router and
     return the routed nets (one per input net). `wired` is a list of
     `(net, pts)` where `pts` are `(ref, pin, xy, comp)` records.
 
-    Wires are NOT committed here — the caller decides per net whether to draw
-    the wire or, for a net that spans the IC side-to-side, drop net labels
-    instead. `rail_y_hints`, `keepouts` (hard, the IC) and `bodies` (soft, the
-    passives) pass straight through to `route_nets`."""
+    Every pin is left by a colinear stub of length `stub` along its away-
+    direction (so no wire bends flush on a pin and shared taps become
+    junctions). Wires are NOT committed here — the caller decides per net
+    whether to draw the wire or, for a net that spans the IC side-to-side, drop
+    net labels instead. `rail_y_hints`, `keepouts` (hard, the IC) and `bodies`
+    (soft, the passives) pass straight through to `route_nets`."""
+    # Per-pin away-direction so the router can grow a clean stub off each pin.
+    pin_dirs: dict[tuple[float, float], tuple[float, float]] = {}
+    for _net, pts in wired:
+        for _ref, _pin, xy, comp in pts:
+            if xy not in pin_dirs:
+                pin_dirs[xy] = _DIR_VEC[_away_dir(comp, xy)]
     return route_nets(
         [(net.name, [p[2] for p in pts]) for net, pts in wired], all_pins,
         rail_y_hints=rail_y_hints, keepouts=keepouts, bodies=bodies,
+        pin_dirs=pin_dirs, stub=stub,
     )
 
 
 def _commit_wires(sch: ksa.Schematic, routed: list, issues: list[str]) -> None:
-    """Draw the wire segments of each routed net onto the schematic."""
+    """Draw the wire segments of each routed net, then drop a `(junction)` dot
+    at each wire-to-wire connection point (a stub tapping a rail, a 3-way tee) —
+    the connection dot KiCad shows where wires join."""
     for rn in routed:
         for a, b in rn.segments:
             try:
                 sch.add_wire(a, b)
             except Exception as e:
                 issues.append(f"wire on {rn.name}: {e}")
+        for jp in junctions_for(rn.segments):
+            try:
+                sch.junctions.add(jp)
+            except Exception as e:  # noqa: BLE001
+                issues.append(f"junction on {rn.name}: {e}")
 
 
 def _net_crosses_ic(rn, ic_rects: list[tuple[float, float, float, float]]) -> bool:
@@ -1334,6 +1352,7 @@ def _place_connectivity(
     wiring: str = "router",
     rail_y_hints: dict[str, float] | None = None,
     label_only_nets: set[str] | None = None,
+    stub: float | None = None,
 ) -> list[LabelSpec]:
     """Render every net's connectivity.
 
@@ -1580,7 +1599,8 @@ def _place_connectivity(
         ic_rects = _ic_keepouts(sch, plan.ics)
         body_rects = _passive_bodies(sch, placed_refs, plan.ics)
         routed = _wire_router(wired, all_pins, rail_y_hints=rail_y_hints,
-                              keepouts=ic_rects, bodies=body_rects)
+                              keepouts=ic_rects, bodies=body_rects,
+                              stub=_WIRE_STUB if stub is None else stub)
         by_name = {net.name: (net, pts) for net, pts in wired}
         committed: list = []
         for rn in routed:

@@ -1,4 +1,4 @@
-"""Orthogonal wire router — crossing-minimising, junction-free.
+"""Orthogonal wire router — crossing-minimising, with pin stubs + junctions.
 
 Replaces the placer's star-fan wiring (`netlist_to_sch._place_connectivity`).
 Given each net's pin coordinates it produces orthogonal wire segments
@@ -19,12 +19,19 @@ them all:
 Topology — each net is wired as a crossing-aware spanning tree over its
 pins, grown edge by edge: every step adds the out-of-tree pin whose best
 route to the tree scores lowest, so the tree shape itself dodges crossings,
-not just the elbow of a pre-chosen edge. Every edge runs pin-to-pin, so
-every wire endpoint lands on a pin: connections happen only at pins and no
-`(junction)` element is ever needed. Each edge is routed straight, as an L,
-a Z, or a detour, chosen to avoid foreign collinear overlap (a short —
+not just the elbow of a pre-chosen edge. Each edge is routed straight, as an
+L, a Z, or a detour, chosen to avoid foreign collinear overlap (a short —
 heaviest weight) and corners on foreign pins, then to minimise crossings,
 body intrusions and length.
+
+Stubs + junctions. Every pin is left by a colinear stub of length `stub` along
+its away-direction (`pin_dirs`), and the trunk is routed between the two
+*stub-ends* — so no wire ever bends flush on a pin, and a shared rail runs one
+stub off the pin row. The stub auto-shortens (down to zero) when it would land
+on a foreign pin, so two adjacent pins one stub apart never short. Sibling tree
+edges share a pin's stub-end, which `junctions_for` then marks with a
+`(junction)` dot (the connection KiCad draws where ≥3 wires meet or a stub taps
+a rail). `stub=0`/no `pin_dirs` ⇒ legacy pin-to-pin routing.
 
 v1 scope: greedy (route order = ascending net span; no rip-up/reroute). When
 the placement crams unrelated nets into one column the router can only
@@ -153,6 +160,43 @@ def _dedup(pts: list[Pt]) -> list[Pt]:
     for p in pts:
         if not any(_same(p, q) for q in out):
             out.append(p)
+    return out
+
+
+def _clear_stub(p: Pt, d: Pt | None, stub: float, foreign: list[Pt]) -> Pt:
+    """The pin `p` pulled along its away-direction `d` by the longest stub up to
+    `stub` (stepping down by the grid) whose segment lands on / crosses no
+    `foreign` point — a foreign pin or a prior net's corner. Two adjacent pins
+    one stub apart (e.g. a connector's two CC pins) would otherwise have the
+    lower pin's stub end exactly on the upper pin and short the nets; clamping
+    to zero there falls back to a clean pin-to-pin route. No facing/stub ⇒ the
+    pin itself."""
+    if not d or stub <= _EPS:
+        return p
+    steps = max(1, int(round(stub / _GRID)))
+    for k in range(steps, 0, -1):
+        L = stub * k / steps
+        end = (p[0] + d[0] * L, p[1] + d[1] * L)
+        seg = (p, end)
+        if not any(_same(end, f) or _interior(f, seg) for f in foreign):
+            return end
+    return p
+
+
+def _dedup_segs(segs: list[Seg]) -> list[Seg]:
+    """Drop exact-duplicate segments (a pin's stub is grown once per incident
+    tree edge; the repeats collapse to one wire — and make the shared stub-end
+    a clean 3-way `(junction)` tap)."""
+    seen: set = set()
+    out: list[Seg] = []
+    for s in segs:
+        (ax, ay), (bx, by) = s
+        k = tuple(sorted(((round(ax, 3), round(ay, 3)),
+                          (round(bx, 3), round(by, 3)))))
+        if k in seen:
+            continue
+        seen.add(k)
+        out.append(s)
     return out
 
 
@@ -298,29 +342,51 @@ def _route_edge(
     a: Pt, b: Pt, net: str, placed: list[tuple[str, Seg]],
     blocked: list[Pt], foreign_pins: list[Pt], bodies: list[Rect],
     keepouts: list[Rect], hint_y: float | None = None,
+    pin_dirs: dict | None = None, stub: float = 0.0,
 ) -> list[Seg]:
     """Best orthogonal route a→b: corners clear of `blocked`, then lowest
     score (foreign overlap / over-pin ≫ crossings ≫ body intrusion ≫ length).
     Falls back to the best illegal route only if every candidate has a
     blocked corner.
 
+    Each pin is left by a colinear stub of length `stub` along its away-
+    direction (`pin_dirs[pin]`): the trunk is routed between the two *stub-ends*
+    and the stubs prepended/appended, so no wire ever bends flush on a pin, and
+    a stub-end shared by sibling tree edges becomes a clean `(junction)` tap.
+    `pin_dirs`/`stub` omitted ⇒ legacy pin-to-pin routing.
+
     `hint_y` (optional) pins the horizontal trunk to a specific Y — used for
     staircase taps where the IC pin's Y is the only safe trunk row, above
     the row of tap bodies. The hint is *one extra candidate*; the scorer
     still chooses, so a hinted route that overlaps a foreign wire loses to
     a non-hinted one that doesn't."""
-    cands = _candidates(a, b)
+    da = pin_dirs.get(a) if pin_dirs else None
+    db = pin_dirs.get(b) if pin_dirs else None
+    sa = _clear_stub(a, da, stub, blocked)
+    sb = _clear_stub(b, db, stub, blocked)
+    cands = _candidates(sa, sb)
     if hint_y is not None:
-        hinted = _hint_route(a, b, hint_y)
+        hinted = _hint_route(sa, sb, hint_y)
         if hinted is not None:
             cands = [hinted, *cands]
     if keepouts:
-        cands = cands + _keepout_detours(a, b, keepouts)
+        cands = cands + _keepout_detours(sa, sb, keepouts)
+
+    def _wrap(trunk: list[Seg]) -> list[Seg]:
+        segs: list[Seg] = []
+        if not _same(a, sa):
+            segs.append((a, sa))
+        segs.extend(trunk)
+        if not _same(sb, b):
+            segs.append((sb, b))
+        return [s for s in segs if _seg_len(s) > _EPS]
+
+    routes = [_wrap(r) for r in cands]
     legal = [
-        r for r in cands
+        r for r in routes
         if not any(_same(c, p) for c in _corners(r) for p in blocked)
     ]
-    return min(legal or cands,
+    return min(legal or routes,
                key=lambda r: _score(r, net, placed, foreign_pins,
                                     bodies, keepouts))
 
@@ -329,6 +395,7 @@ def _route_tree(
     upts: list[Pt], net: str, placed: list[tuple[str, Seg]],
     blocked: list[Pt], foreign_pins: list[Pt], bodies: list[Rect],
     keepouts: list[Rect], hint_y: float | None = None,
+    pin_dirs: dict | None = None, stub: float = 0.0,
 ) -> tuple[list[Seg], list[Pt]]:
     """Wire `upts` as a crossing-aware spanning tree, grown edge by edge:
     each step adds the out-of-tree pin whose best route to the in-tree pins
@@ -358,7 +425,7 @@ def _route_tree(
                     continue
                 route = _route_edge(upts[i], upts[j], net, placed,
                                     blocked, foreign_pins, bodies, keepouts,
-                                    hint_y)
+                                    hint_y, pin_dirs, stub)
                 sc = _score(route, net, placed, foreign_pins, bodies, keepouts)
                 if best is None or sc < best[0]:
                     best = (sc, route, j)
@@ -385,6 +452,8 @@ def route_nets(
     bodies: list[Rect] | None = None,
     rail_y_hints: dict[str, float] | None = None,
     keepouts: list[Rect] | None = None,
+    pin_dirs: dict | None = None,
+    stub: float = 0.0,
 ) -> list[RoutedNet]:
     """Route every net. `nets` is (name, pin-coords); `all_pins` is every pin
     in the schematic (corners must dodge foreign ones); `bodies` are component
@@ -425,12 +494,35 @@ def route_nets(
         blocked = foreign_all + placed_corners
         segs, corners = _route_tree(
             upts, name, placed, blocked, foreign_wired, bodies, keepouts,
-            hint_y=rail_y_hints.get(name),
+            hint_y=rail_y_hints.get(name), pin_dirs=pin_dirs, stub=stub,
         )
-        routed[name] = segs
+        routed[name] = _dedup_segs(segs)
         placed_corners.extend(corners)
 
     return [RoutedNet(name, routed[name]) for name, _ in nets]
+
+
+def junctions_for(segments: list[Seg]) -> list[Pt]:
+    """Points of one net's routed segments that need a KiCad `(junction)` dot:
+    where ≥3 wire-ends meet (a T / +), or a wire-end taps another segment's
+    interior (the stub dropping into a shared rail). A 2-end point is a plain
+    L-corner or a colinear continuation and needs none. Deterministic (sorted);
+    only ever called per net, so a same-coord point is always one connection."""
+    ends: dict[tuple, int] = {}
+    rep: dict[tuple, Pt] = {}
+    for (a, b) in segments:
+        for p in (a, b):
+            k = (round(p[0], 2), round(p[1], 2))
+            ends[k] = ends.get(k, 0) + 1
+            rep.setdefault(k, p)
+    out: list[Pt] = []
+    for k in sorted(rep):
+        p = rep[k]
+        ec = ends[k]
+        ic = sum(1 for s in segments if _interior(p, s))
+        if ec >= 3 or (ic >= 1 and ec >= 1) or ic >= 2:
+            out.append(p)
+    return out
 
 
 def count_crossings(routed: list[RoutedNet]) -> int:

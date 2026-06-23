@@ -94,6 +94,13 @@ function App() {
   const [conversationId, setConversationId] = useState<string | null>(null);
   const [attachments, setAttachments] = useState<StagedAttachment[]>([]);
   const [isStreaming, setIsStreaming] = useState(false);
+  // True between a Stop click and the backend's wind-down `done`. The agent's
+  // current step (LLM turn / tool) finishes, then it stops; we block new sends
+  // until `done` so a fresh /chat can't race the still-draining drive.
+  const [isStopping, setIsStopping] = useState(false);
+  // Hard-abort watchdog: if the backend doesn't wind down (stuck in a long
+  // tool/LLM call) we abort the fetch as a fallback. Cleared on done/error.
+  const stopTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // True after a `suspended` event arrives — the agent is waiting on the
   // user's answer (either a QuestionsCard option click OR freeform text
   // through the chat input). Drives `onSend` to call `/resume` instead of
@@ -179,6 +186,8 @@ function App() {
     }
     if (e.kind === "done") {
       setIsStreaming(false);
+      setIsStopping(false);
+      clearStopWatch();
       // Turn completed without suspending → server has no pending question.
       setIsAwaitingAnswer(false);
       streamRef.current = null;
@@ -210,6 +219,8 @@ function App() {
       });
       // Suspended = agent is waiting on the user, no longer actively working.
       setIsStreaming(false);
+      setIsStopping(false);
+      clearStopWatch();
       setIsAwaitingAnswer(true);
       streamRef.current = null;
       collapseLiveTools();
@@ -224,18 +235,52 @@ function App() {
     const text = (err as Error)?.message ?? String(err);
     setMessages((m) => [...m, { id: uid(), kind: "system", text: `error: ${text}` }]);
     setIsStreaming(false);
+    setIsStopping(false);
+    clearStopWatch();
     streamRef.current = null;
     collapseLiveTools();
+  }
+
+  function clearStopWatch() {
+    if (stopTimerRef.current) {
+      clearTimeout(stopTimerRef.current);
+      stopTimerRef.current = null;
+    }
+  }
+
+  // Stop an in-flight drive. Tell the backend to wind down cooperatively (its
+  // current step finishes, then it emits `system` + `done` over the still-open
+  // stream, which resets state through the `done` handler). Keep the stream
+  // open so that graceful end arrives; a watchdog hard-aborts the fetch if the
+  // backend is wedged in a long tool/LLM call and never reaches a checkpoint.
+  function onStop() {
+    if (!isStreaming || isStopping) return;
+    const convId = conversationId;
+    if (!convId) return;
+    setIsStopping(true);
+    api.cancelChat(convId).catch(() => {});
+    clearStopWatch();
+    stopTimerRef.current = setTimeout(() => {
+      streamRef.current?.close();
+      streamRef.current = null;
+      setIsStreaming(false);
+      setIsStopping(false);
+      stopTimerRef.current = null;
+      setMessages((m) => [...m, { id: uid(), kind: "system", text: "Stopped." }]);
+      collapseLiveTools();
+    }, 8000);
   }
 
   function onNewSession() {
     streamRef.current?.close();
     streamRef.current = null;
+    clearStopWatch();
     setMessages([]);
     setDraft("");
     setAttachments([]);
     setConversationId(null);
     setIsStreaming(false);
+    setIsStopping(false);
     setIsAwaitingAnswer(false);
     setCost(null);
   }
@@ -244,7 +289,7 @@ function App() {
     const text = draft.trim();
     const pending = attachments;
     if (!text && pending.length === 0) return;
-    if (isStreaming) return;
+    if (isStreaming || isStopping) return;
 
     // Snapshot then clear input + staged attachments so the user can't
     // double-fire while the upload is in flight.
@@ -314,7 +359,7 @@ function App() {
 
   async function onAnswer(msgId: string, qid: string, option: string) {
     if (!conversationId) return;
-    if (isStreaming) return;
+    if (isStreaming || isStopping) return;
     setIsStreaming(true);
     // isAwaitingAnswer is cleared by the resume stream's done/suspended event,
     // not optimistically — so a failed resume leaves it true for retry.
@@ -459,6 +504,8 @@ function App() {
             onAttach={onAttach}
             onRemoveAttachment={onRemoveAttachment}
             isStreaming={isStreaming}
+            isStopping={isStopping}
+            onStop={onStop}
             onNewSession={onNewSession}
             cost={cost}
             cloudMode={config?.mode === "cloud"}

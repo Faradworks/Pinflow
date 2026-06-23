@@ -239,6 +239,28 @@ def _superseded_result(tool_use_id: str) -> dict:
     }
 
 
+def _cancelled_result(tool_use_id: str) -> dict:
+    """Synthetic tool_result for a tool_use the user stopped before (or during)
+    dispatch. Like _superseded_result, every tool_use in a response MUST get a
+    tool_result or the dangling id 400s every later request — so on a mid-turn
+    stop we close out the current + remaining tool_uses with this and keep the
+    conversation resumable."""
+    return {
+        "type": "tool_result",
+        "tool_use_id": tool_use_id,
+        "content": json.dumps(
+            {
+                "status": "cancelled",
+                "hint": "The user stopped the agent before this tool ran.",
+            }
+        ),
+    }
+
+
+# Shown (as a `system` event) when a drive is stopped via POST /agent/cancel.
+_STOPPED_MSG = "Stopped. Send a new message to continue."
+
+
 def _breaker_message(tool: str, status: str, result: Optional[dict]) -> str:
     """Honest, actionable dead-end message when the breaker trips — surfaces the
     tool's real error + hint (never a fabricated 'feature not ready')."""
@@ -522,7 +544,38 @@ def _drive(
     *,
     trace: Optional[TraceSink] = None,
 ) -> Iterator[dict]:
-    """Run LLM turns until end_turn or ask_user suspension."""
+    """Acquire the per-conversation drive guard, then run the turn loop.
+
+    The guard (drive_lock) stops two drives mutating `messages` at once — a new
+    /chat can fire while a just-stopped drive is still draining its in-flight
+    turn/tool. The lock is released in a `finally` so every exit path (normal
+    end, ask_user/cost-cap suspend, error, client disconnect closing the
+    generator, or a cancel) frees it — a missed release would brick the next
+    resume.
+    """
+    if not state.drive_lock.acquire(blocking=False):
+        _trace(trace, t="stop", reason="already_running")
+        yield ev.ev_system(
+            "Still finishing the previous message — try again in a moment."
+        )
+        yield ev.ev_done()
+        return
+
+    # Fresh drive owns the stop flag: clear any leftover so a stale set from a
+    # prior request doesn't insta-kill this one.
+    state.cancel_event.clear()
+    try:
+        yield from _drive_inner(state, trace=trace)
+    finally:
+        state.drive_lock.release()
+
+
+def _drive_inner(
+    state: st.ConversationState,
+    *,
+    trace: Optional[TraceSink] = None,
+) -> Iterator[dict]:
+    """Run LLM turns until end_turn, ask_user suspension, or a stop."""
     if not llm.available(state.llm):
         yield ev.ev_system(llm.NOT_CONFIGURED_MSG)
         yield ev.ev_done()
@@ -548,6 +601,15 @@ def _drive(
     provider = llm.provider_of(state.llm)  # labels the live cost meter
 
     for turn in range(1, _MAX_TURNS + 1):
+        # Stop checkpoint (start of turn): `messages` ends on a user message
+        # here, so bailing leaves the conversation in a valid, resumable shape.
+        # Don't start another (billable) LLM turn.
+        if state.cancel_event.is_set():
+            _trace(trace, t="stop", turn=turn, reason="cancelled")
+            yield ev.ev_system(_STOPPED_MSG)
+            yield ev.ev_done()
+            return
+
         context_block = build_context_block(state)
         _trace(
             trace,
@@ -664,8 +726,24 @@ def _drive(
         tool_uses = [b for b in response.content if getattr(b, "type", None) == "tool_use"]
         tool_results: list[dict] = []
         ask_user_tu = None  # deferred; processed after sibling dispatches
+        cancelled_mid = False  # set if a stop lands between/within tool dispatches
 
         for tu in tool_uses:
+            # Stop checkpoint (before each dispatch): bail WITHOUT firing this
+            # tool — critical so a mutating tool (commit_edit,
+            # add_subcircuit_from_netlist) never runs after a stop. Close out
+            # every tool_use still lacking a result (this one, the rest, and any
+            # deferred ask_user) with a synthetic cancelled result so no id is
+            # left dangling. Covers both "stopped during the LLM call" (first
+            # iteration) and "stopped between tools in a multi-tool turn".
+            if state.cancel_event.is_set():
+                have = {r["tool_use_id"] for r in tool_results}
+                for rem in tool_uses:
+                    if rem.id not in have:
+                        tool_results.append(_cancelled_result(rem.id))
+                cancelled_mid = True
+                break
+
             name = tu.name
             tool_input: dict[str, Any] = dict(tu.input or {})
 
@@ -785,6 +863,17 @@ def _drive(
                     "content": json.dumps(result),
                 }
             )
+
+        # Stopped mid-dispatch: every tool_use got a result (real or cancelled)
+        # above, so flush them as the answering user message — keeping the
+        # conversation resumable — then end. Takes precedence over an ask_user
+        # suspend: a stop should not pop a question card.
+        if cancelled_mid:
+            state.messages.append({"role": "user", "content": tool_results})
+            _trace(trace, t="stop", turn=turn, reason="cancelled")
+            yield ev.ev_system(_STOPPED_MSG)
+            yield ev.ev_done()
+            return
 
         # Suspend on ask_user AFTER siblings dispatched. Their tool_results
         # are stashed for run_resume to flush together with the user's answer.

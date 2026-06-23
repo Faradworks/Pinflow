@@ -100,6 +100,17 @@ class ConversationState:
     # UI via `cost` events and gating the per-request spend cap. See
     # pinflow_api/cost.py and the cost-metering block in agent/loop.py.
     cost: CostMeter = field(default_factory=CostMeter)
+    # Cooperative stop flag. POST /agent/cancel sets it; _drive clears it at
+    # entry and checks it at safe checkpoints (top of each turn, before each
+    # tool dispatch) to wind down without leaving a tool_use unanswered. A
+    # threading.Event is set/read across request threads (cancel runs on a
+    # different thread than the drive in Starlette's threadpool) — atomic, no
+    # extra locking. See agent/loop.py.
+    cancel_event: threading.Event = field(default_factory=threading.Event)
+    # Guards against two concurrent drives mutating `messages` on one
+    # conversation (a new /chat firing while a stopped drive is still draining).
+    # _drive acquires it non-blocking and bails if already held.
+    drive_lock: threading.Lock = field(default_factory=threading.Lock)
 
 
 _lock = threading.Lock()

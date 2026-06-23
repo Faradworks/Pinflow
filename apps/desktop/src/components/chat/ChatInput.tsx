@@ -12,6 +12,10 @@ type Props = {
   onChange: (v: string) => void;
   onSend: () => void;
   disabled?: boolean;
+  // When the agent is running, the send button becomes a Stop button.
+  isStreaming?: boolean;
+  isStopping?: boolean;
+  onStop?: () => void;
   hint?: string;
   attachments: StagedAttachment[];
   onAttach: (files: File[]) => void;
@@ -105,6 +109,9 @@ export function ChatInput({
   onChange,
   onSend,
   disabled,
+  isStreaming,
+  isStopping,
+  onStop,
   hint,
   attachments,
   onAttach,
@@ -276,34 +283,60 @@ export function ChatInput({
           {hint ?? "ui preview · agent wiring coming soon"}
         </span>
         <div style={{ flex: 1 }} />
-        <button
-          type="button"
-          onClick={() => canSend && onSend()}
-          disabled={!canSend}
-          aria-label="Send"
-          style={{
-            width: 28,
-            height: 28,
-            background: canSend ? "var(--ink)" : "var(--line)",
-            color: canSend ? "var(--bg)" : "var(--muted)",
-            border: "none",
-            borderRadius: 7,
-            cursor: canSend ? "pointer" : "default",
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-          }}
-        >
-          <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
-            <path
-              d="M6 10V2M3 5l3-3 3 3"
-              stroke="currentColor"
-              strokeWidth="1.6"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-            />
-          </svg>
-        </button>
+        {isStreaming ? (
+          <button
+            type="button"
+            onClick={() => onStop?.()}
+            disabled={isStopping}
+            aria-label="Stop"
+            title={isStopping ? "Stopping…" : "Stop the agent"}
+            style={{
+              width: 28,
+              height: 28,
+              background: isStopping ? "var(--line)" : "var(--ink)",
+              color: isStopping ? "var(--muted)" : "var(--bg)",
+              border: "none",
+              borderRadius: 7,
+              cursor: isStopping ? "default" : "pointer",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+            }}
+          >
+            <svg width="10" height="10" viewBox="0 0 10 10" fill="currentColor">
+              <rect x="0.5" y="0.5" width="9" height="9" rx="1.5" />
+            </svg>
+          </button>
+        ) : (
+          <button
+            type="button"
+            onClick={() => canSend && onSend()}
+            disabled={!canSend}
+            aria-label="Send"
+            style={{
+              width: 28,
+              height: 28,
+              background: canSend ? "var(--ink)" : "var(--line)",
+              color: canSend ? "var(--bg)" : "var(--muted)",
+              border: "none",
+              borderRadius: 7,
+              cursor: canSend ? "pointer" : "default",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+            }}
+          >
+            <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
+              <path
+                d="M6 10V2M3 5l3-3 3 3"
+                stroke="currentColor"
+                strokeWidth="1.6"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              />
+            </svg>
+          </button>
+        )}
       </div>
     </div>
   );

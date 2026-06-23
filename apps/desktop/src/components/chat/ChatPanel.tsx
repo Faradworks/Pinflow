@@ -23,6 +23,8 @@ type Props = {
   onAttach: (files: File[]) => void;
   onRemoveAttachment: (key: string) => void;
   isStreaming: boolean;
+  isStopping?: boolean;
+  onStop?: () => void;
   onNewSession: () => void;
   cost?: CostInfo | null;
   cloudMode?: boolean;
@@ -116,6 +118,8 @@ export function ChatPanel({
   onAttach,
   onRemoveAttachment,
   isStreaming,
+  isStopping,
+  onStop,
   onNewSession,
   cost,
   cloudMode,
@@ -231,6 +235,9 @@ export function ChatPanel({
           onChange={onDraftChange}
           onSend={onSend}
           disabled={isStreaming}
+          isStreaming={isStreaming}
+          isStopping={isStopping}
+          onStop={onStop}
           hint={hint}
           attachments={attachments}
           onAttach={onAttach}

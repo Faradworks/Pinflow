@@ -1387,12 +1387,6 @@ void main() {
                 icon="settings"
                 button-location="bottom">
                 <kc-preferences-panel></kc-preferences-panel>
-            </kc-ui-activity>`,f` <kc-ui-activity
-                slot="activities"
-                name="Help"
-                icon="help"
-                button-location="bottom">
-                <kc-help-panel></kc-help-panel>
             </kc-ui-activity>`]}change_activity(t){this.#t?.change_activity(t)}render(){let t=this.controls??"none",r=un(this.controlslist??"",t=="none"?{fullscreen:!1,download:!1,flipview:!1}:{fullscreen:!0,download:!0,flipview:!0});this.#e=this.make_viewer_element(),this.#e.disableinteraction=t=="none";let i=null;if(t=="full"){let p=this.make_pre_activities(),u=this.make_post_activities(),m=this.make_activities();this.#t=f`<kc-ui-activity-side-bar
                 collapsed="${this.sidebarcollapsed}">
                 ${p} ${m} ${u}

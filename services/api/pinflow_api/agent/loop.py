@@ -559,6 +559,21 @@ def _drive(
             tools=[s["name"] for s in TOOL_SCHEMAS],
             messages=state.messages,
         )
+        # Rolling cache breakpoint on the conversation tail. The system
+        # breakpoints below cache the stable prefix; tagging the last message
+        # block extends the cache through the history so far, so the next turn
+        # reads it at cache rate instead of re-billing it as fresh input. Strip
+        # the prior breakpoint first to stay under the 4-slot cap. On a miss it
+        # falls back to the system caches, no correctness impact.
+        for _m in state.messages:
+            for _b in _m["content"] if isinstance(_m["content"], list) else ():
+                if isinstance(_b, dict):
+                    _b.pop("cache_control", None)
+        if state.messages:
+            _tail = state.messages[-1]["content"]
+            if isinstance(_tail, list) and _tail and isinstance(_tail[-1], dict):
+                _tail[-1]["cache_control"] = {"type": "ephemeral"}
+
         try:
             # with_raw_response (not .create) so we can read the gateway's
             # per-call credit headers off `raw.headers`; `.parse()` returns the

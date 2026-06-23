@@ -91,7 +91,8 @@
     <label class="chk" data-tip="animation playback speed (frames advanced per tick)">speed <input id="speed" class="sp" type="range" min="1" max="10" value="3"></label>
     <label class="chk" data-tip="show each non-IC body's keep-out box (half-size + margin); a box turns red when two overlap — that pair is the symbol_overlap penalty the repulsion force fights"><input id="gate" type="checkbox" checked> gate boxes</label>
     <label class="chk" data-tip="draw each net as pin stubs + L-routes to the net centroid (the star-attraction target each pin is pulled toward)"><input id="trunk" type="checkbox" checked> net trunks</label>
-    <button id="snap" data-tip="toggle the final grid-snapped layout (what the placer emits, after force-relaxation + snap/label)">show snapped</button>
+    <label class="chk" data-tip="animate the FINAL placed layout converging — each frame is run through the placer's snap stages (grid + structural group snaps: divider stacks, even-pitch cap banks, de-cram, anti-stack), so the animation matches the KiCad render on the right. Off = raw force positions only."><input id="snapframes" type="checkbox" checked> snapped frames</label>
+    <button id="snap" data-tip="jump to the final grid-snapped layout (what the placer emits, after force-relaxation + snap/label)">show snapped</button>
     <span class="sep"></span>
     <span id="hud">—</span>
   </div>
@@ -101,6 +102,9 @@
     <div id="tune" class="hide">
       <h4>live tuner</h4>
       <div class="trow" data-tip="which corpus circuit to relax — switching re-runs the real fdcore.simulate"><label>fixture</label><select id="fixture"></select></div>
+      <div class="trow" data-tip="hard-snap every part to the chosen grid each iteration, so the relaxation itself is grid-exact — this animation then equals the placed result. Off = legacy continuous relax with a single grid snap at the very end (which shifts every part by up to ±0.6mm)."><label>snap grid</label><input type="checkbox" id="snapgrid" checked style="accent-color:var(--acc)"><span class="val" style="flex:1"></span></div>
+      <div class="trow" data-tip="the grid the layout snaps to AND the unit for the wire-stub length — one of KiCad's standard schematic grids (mm ≈ 100/50/25/10 mil). Drives both the snap-to-grid quantum (left) and the router pin stub (right render)."><label>grid (mm)</label><select id="gridsel"></select></div>
+      <div class="trow" data-tip="minimum wire stub off every pin, in grid units (stub length = this × grid). Keeps a clean colinear lead so no wire lands flush on a pin; where stubs tap a shared rail, KiCad draws a junction dot. 0 = no stub (legacy flush connection)."><label>stub (grid)</label><input type="range" id="stubunits" min="0" max="4" step="1" value="2"><span class="val" id="stubunitsval">2</span></div>
       <div class="tsep"></div>
       <div id="sliders"></div>
       <div class="tsep"></div>
@@ -138,7 +142,11 @@ function facing(node,pin,pos){ return rot(pin.fx,pin.fy,pos[2]); }
 function framePositions(){
   const m={};
   if(showSnap){ for(const n of DATA.graph.nodes){ const s=DATA.snapped[n.ref]||[0,0]; m[n.ref]=[s[0],s[1],0]; } return m; }
-  for(const nd of DATA.frames[frame].nodes) m[nd.ref]=[nd.x,nd.y,nd.rot||0];
+  const fr=DATA.frames[frame], sf=$('snapframes');
+  // "snapped frames": animate the placer's finalized layout per frame (grid +
+  // structural group snaps) so the animation matches the KiCad render.
+  if(sf && sf.checked && fr.snapped){ for(const k in fr.snapped){ const s=fr.snapped[k]; m[k]=[s[0],s[1],0]; } return m; }
+  for(const nd of fr.nodes) m[nd.ref]=[nd.x,nd.y,nd.rot||0];
   return m;
 }
 
@@ -146,9 +154,13 @@ function computeFit(){
   let minX=1e9,minY=1e9,maxX=-1e9,maxY=-1e9;
   const consider=(x,y)=>{minX=Math.min(minX,x);minY=Math.min(minY,y);maxX=Math.max(maxX,x);maxY=Math.max(maxY,y);};
   const byRef=Object.fromEntries(DATA.graph.nodes.map(n=>[n.ref,n]));
-  // union over all frames so the view never jumps during playback
-  for(const f of DATA.frames) for(const nd of f.nodes){
-    const n=byRef[nd.ref]; consider(nd.x-n.hx,nd.y-n.hy); consider(nd.x+n.hx,nd.y+n.hy);
+  // union over all frames (raw AND per-frame snapped) so the view never jumps
+  // during playback regardless of the snapped-frames toggle
+  for(const f of DATA.frames){
+    for(const nd of f.nodes){ const n=byRef[nd.ref];
+      consider(nd.x-n.hx,nd.y-n.hy); consider(nd.x+n.hx,nd.y+n.hy); }
+    if(f.snapped) for(const ref in f.snapped){ const n=byRef[ref]; if(!n) continue;
+      const s=f.snapped[ref]; consider(s[0]-n.hx,s[1]-n.hy); consider(s[0]+n.hx,s[1]+n.hy); }
   }
   for(const n of DATA.graph.nodes){ const s=DATA.snapped[n.ref]; if(s){ consider(s[0]-n.hx,s[1]-n.hy); consider(s[0]+n.hx,s[1]+n.hy);} }
   return {minX,minY,maxX,maxY};
@@ -257,7 +269,7 @@ function loop(t){ if(playing&&DATA&&!showSnap){ acc+= (+$('speed').value); if(ac
 $('play').onclick=()=>{ playing=!playing; $('play').textContent=playing?'⏸ pause':'▶ play'; if(playing) showSnap=false; };
 $('back').onclick=()=>step(-1); $('fwd').onclick=()=>step(1);
 $('scrub').oninput=e=>{ showSnap=false; frame=+e.target.value; draw(); };
-$('gate').onchange=draw; $('trunk').onchange=draw;
+$('gate').onchange=draw; $('trunk').onchange=draw; $('snapframes').onchange=draw;
 $('snap').onclick=()=>{ showSnap=!showSnap; $('snap').style.borderColor=showSnap?'#43d18b':''; draw(); };
 $('file').onchange=e=>{ const f=e.target.files[0]; if(!f) return;
   f.text().then(t=>setData(JSON.parse(t))).catch(err=>alert('bad JSON: '+err)); };
@@ -307,18 +319,35 @@ function buildPanel(def){
     inp.oninput=()=>{ val.textContent=fmt(k,inp.value); scheduleTrace(); };
     host.appendChild(row);
   }
+  $('snapgrid').checked = def.snap_grid !== false;   // mirror the placer default
+  // grid combobox (KiCad presets) — drives snap quantum + stub unit
+  const gridsel=$('gridsel'); gridsel.innerHTML='';
+  for(const g of (def.grid_presets||[2.54,1.27,0.635,0.254])){
+    const o=document.createElement('option'); o.value=String(g);
+    o.textContent=g+' mm'; gridsel.appendChild(o); }
+  gridsel.value=String(def.grid ?? 1.27);
+  const su=$('stubunits'), suv=$('stubunitsval');
+  su.value=def.stub_units ?? 2; suv.textContent=su.value;
   fx.onchange=requestTrace;
+  $('snapgrid').onchange=requestTrace;
+  gridsel.onchange=requestTrace;
+  su.oninput=()=>{ suv.textContent=su.value; scheduleTrace(); };
   $('reset').onclick=()=>{ for(const inp of host.querySelectorAll('input')){ const k=inp.dataset.key;
     const d=k==='iters'?def.iters:k==='margin'?def.margin:def.gains[k];
-    inp.value=d; inp.nextElementSibling.textContent=fmt(k,d); } requestTrace(); };
+    inp.value=d; inp.nextElementSibling.textContent=fmt(k,d); }
+    $('snapgrid').checked=def.snap_grid!==false; gridsel.value=String(def.grid??1.27);
+    su.value=def.stub_units??2; suv.textContent=su.value; requestTrace(); };
   $('tune').classList.remove('hide');
   document.body.classList.add('live');   // reveal the KiCad-render pane (server mode only)
   requestTrace();
 }
 function scheduleTrace(){ clearTimeout(traceTimer); traceTimer=setTimeout(requestTrace,250); }
-function tuneParams(){  // fixture + every slider, shared by /api/trace and /api/render
+function tuneParams(){  // fixture + every slider + snap toggle, shared by /api/trace and /api/render
   const p=new URLSearchParams(); p.set('fixture',$('fixture').value);
   for(const inp of $('sliders').querySelectorAll('input')) p.set(inp.dataset.key,inp.value);
+  p.set('snap_grid', $('snapgrid').checked ? '1' : '0');
+  if($('gridsel')) p.set('grid', $('gridsel').value);
+  if($('stubunits')) p.set('stub_units', $('stubunits').value);
   return p;
 }
 let traceSeq=0;

@@ -13,7 +13,7 @@ This dir (`dev/layout-sim/`) is the debug viewer. The engine itself lives under 
 | `services/api/pinflow_api/emit/fdcore.py` | **The physics.** Pure, no `kicad_sch_api`. `simulate(nodes, edges, cfg)`. Single source of truth — the placer AND this viewer run the same `simulate`. |
 | `services/api/pinflow_api/emit/placers/fdplace.py` | The placer. Mirrors `cplace._build_once`'s scaffold, swaps the constraint solve for `fdcore.simulate`, then snaps + labels, then reuses cplace's router/serialize. `trace_layout()` produces this viewer's JSON. |
 | `services/api/scripts/dump_layout_graph.py` | `--trace` runs the real sim and dumps `{graph, frames, snapped}`. |
-| `dev/layout-sim/index.html` | Canvas playback (scrubber, gate-box overlay, show-snapped) on the left; in `--serve` mode a split pane on the right shows the **real kicad-cli render** of the settled layout (auto-refreshed per gain change via `/api/render`). Pure rendering — no JS physics. |
+| `dev/layout-sim/index.html` | Canvas playback (scrubber, gate-box overlay) on the left; a **snapped frames** toggle (default on) animates the placer's *finalized* layout per frame (grid + structural `_snap_groups`/`_align_snap`/anti-stack), so the animation converges to exactly what the placer emits; in `--serve` mode a split pane on the right shows the **real kicad-cli render** of the settled layout (auto-refreshed per gain change via `/api/render`). Pure rendering — no JS physics; `trace_layout` precomputes each frame's `snapped` positions. |
 | `dev/layout-sim/graph.json` | Generated trace (gitignore-able; regenerate any time). |
 
 Modified production files (small): `cplace.py` (extracted `_horiz_refs`, shared), `placers/__init__.py`
@@ -25,9 +25,15 @@ Modified production files (small): `cplace.py` (extracted `_horiz_refs`, shared)
   placer runs — no physics twin to drift. Don't reimplement forces in JS.
 - **Pipeline: forces → snap → label.** (1) `fdcore.simulate` places parts (star attraction to net
   centroids, AABB-overlap repulsion = the symbol_overlap-gate gradient, gravity power↑/gnd↓, role-based
-  L→R flow; damped-Euler + cooling). (2) `fdplace._snap_groups`/`_finalize_positions` make the
-  grid-exact craft metrics crisp (divider/shunt columns, even-pitch banks, 1.27 grid, anti-stack).
+  L→R flow; damped-Euler + cooling). The relaxation is **grid-exact**: `SimConfig.snap_grid` (default
+  **on**) hard-snaps every free node to the 1.27 grid after each integration step (velocity stays
+  continuous), so what you watch settling *is* the placed result — no end-of-run shift. (2)
+  `fdplace._snap_groups`/`_finalize_positions` make the *structural* craft metrics crisp (divider/shunt
+  columns, even-pitch banks, anti-stack); with `snap_grid` on the trailing 1.27 grid-round is a no-op.
   (3) `fdplace._place_labels` places text. **Labels are cosmetic and NEVER move a part** (per Sid).
+  The viewer's **snap grid** toggle drives `SimConfig.snap_grid` live (off = legacy continuous relax +
+  one-shot snap). Corpus impact (fdplace, snap on vs off): net-neutral mean (+0.001) — buck_tps62840
+  +0.031, mt3608 −0.014, tps61088 −0.013, rest ≈0; `test_no_ic_wires` + fdplace determinism stay green.
 - **The seam.** A placer only fills `placed_refs[ref]=(x,y)` (+ rotations); everything downstream
   (router `emit/route.py`, no-connects, serialize) is reused verbatim. `fdplace._build_once` mirrors
   `cplace._build_once`; only the middle (solve→positions) differs.
@@ -58,6 +64,11 @@ cd ../../dev/layout-sim && python3 -m http.server 8777      # → http://localho
 # viewer (live tuner): sliders re-run the REAL fdcore.simulate per change
 .venv/bin/python scripts/dump_layout_graph.py --serve        # → http://127.0.0.1:8777
 ```
+
+Wiring: the production router (`emit/route.py`, shared by cplace + fdplace) leaves every pin a colinear
+**stub** along its away-direction and drops a `(junction)` dot where stubs tap a shared rail — default
+on. The viewer's **grid (mm)** combobox (KiCad presets) sets the snap quantum *and* the stub unit; the
+**stub (grid)** slider sets the stub length in grid units (`/api/render?grid=&stub_units=`).
 
 The live tuner (`--serve`) adds an `/api/trace` endpoint the viewer's gain sliders
 hit on every change; the server runs `fdplace.trace_layout` with the requested

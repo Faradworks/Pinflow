@@ -247,17 +247,27 @@ def _netlist_and_cfg(query: dict[str, list[str]]):
     base = fdcore.SimConfig()
     iters = int(query["iters"][0]) if "iters" in query else base.iters
     margin = float(query["margin"][0]) if "margin" in query else base.margin
-    cfg = fdcore.SimConfig(gains=gains, iters=iters, margin=margin)
+    grid = float(query["grid"][0]) if "grid" in query else base.grid
+    snap_grid = base.snap_grid
+    if "snap_grid" in query:
+        snap_grid = query["snap_grid"][0] not in ("0", "false", "off", "")
+    cfg = fdcore.SimConfig(gains=gains, iters=iters, margin=margin, grid=grid,
+                           snap_grid=snap_grid)
+
+    # Wire stub = N grid units of the chosen grid (the combobox grid drives both
+    # the snap quantum above and the router's pin stub below).
+    stub_units = float(query["stub_units"][0]) if "stub_units" in query else 2.0
+    stub = stub_units * grid
 
     name = path.stem.replace(".netlist", "")
-    return netlist, cfg, name
+    return netlist, cfg, name, stub
 
 
 def _trace_payload(query: dict[str, list[str]]) -> dict:
     """Run the real force sim for `?fixture=` and return the viewer trace."""
     from pinflow_api.emit.placers.fdplace import trace_layout
 
-    netlist, cfg, name = _netlist_and_cfg(query)
+    netlist, cfg, name, _stub = _netlist_and_cfg(query)
     return trace_layout(netlist, title=name, cfg=cfg)
 
 
@@ -270,8 +280,8 @@ def _render_png(query: dict[str, list[str]]) -> bytes:
     from pinflow_api.emit.placers.fdplace import fdplace
     from pinflow_api.emit.render import render_schematic_bytes
 
-    netlist, cfg, name = _netlist_and_cfg(query)
-    result = fdplace(netlist, title=name, cfg=cfg)
+    netlist, cfg, name, stub = _netlist_and_cfg(query)
+    result = fdplace(netlist, title=name, cfg=cfg, stub=stub)
     return render_schematic_bytes(result.sch_text, white_background=True, dpi=150)
 
 
@@ -313,6 +323,11 @@ def _serve(port: int) -> None:
                     "gains": dict(fdcore.DEFAULT_GAINS),
                     "iters": base.iters,
                     "margin": base.margin,
+                    "snap_grid": base.snap_grid,
+                    "grid": base.grid,
+                    # KiCad's common schematic grids (mm ≈ 100/50/25/10 mil).
+                    "grid_presets": [2.54, 1.27, 0.635, 0.254],
+                    "stub_units": 2.0,
                     "fixtures": _list_fixtures(),
                 })
             if u.path == "/api/trace":

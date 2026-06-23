@@ -104,7 +104,30 @@ class SimConfig:
     iters: int = 600
     seed: int = 0
     margin: float = 2.54         # symbol_overlap gate margin (mm)
-    grid: float = 1.27           # final snap grid (applied by the wrapper)
+    grid: float = 1.27           # snap grid (final snap by the wrapper; also the
+                                 # in-loop quantum when `snap_grid` is on)
+    init_spread: float = 1.0     # scale on the per-node seed offset radius in
+                                 # `_init_positions`. 1.0 = current tight seeding
+                                 # (each support ~3.8–8.9 mm off its connected IC
+                                 # pin); >1 starts supports farther out / less
+                                 # overlapped so early repulsion is gentler — but
+                                 # the iteration/cooling budget is fixed, so too
+                                 # wide under-converges (parts stranded in flight).
+                                 # 1.0 is byte-exact with the pre-knob seeding.
+    best_of: tuple[tuple[float, int], ...] = ()
+                                 # opt-in best-of-spread. Each (init_spread, iters)
+                                 # is a candidate the *placer* (fdplace) places and
+                                 # rubric-scores, keeping the highest. () = single-
+                                 # shot (default). The physics core ignores this —
+                                 # it's orchestration data fdplace reads. A max over
+                                 # candidates can't regress single-shot; pair wide
+                                 # spreads with more iters or they under-converge.
+    snap_grid: bool = True       # hard-snap every free node to `grid` after each
+                                 # integration step (velocity stays continuous).
+                                 # Makes the relaxation itself grid-exact, so the
+                                 # animation == the placed result and the wrapper's
+                                 # trailing grid round is a no-op. Set False for the
+                                 # legacy continuous relax + one-shot snap at the end.
     trace: bool = False
     trace_every: int = 0         # 0 → auto (~200 frames)
     reorient_every: int = 0      # 0 → core does no rotation (v1)
@@ -193,10 +216,11 @@ def _facing_world(node: Node, pin: Pin) -> tuple[float, float]:
 # --- initial positions -------------------------------------------------------
 
 def _init_positions(nodes: list[Node], edges: list[Edge],
-                    by_ref: dict[str, Node]) -> None:
+                    by_ref: dict[str, Node], spread: float = 1.0) -> None:
     """Seed each free node near a pinned (IC) pin it connects to, with a
     deterministic per-index offset so coincident seeds separate. No RNG on the
-    main path — init is a pure function of the input."""
+    main path — init is a pure function of the input. `spread` scales the seed
+    offset radius (1.0 = baseline tight seeding)."""
     pinned = {n.ref for n in nodes if n.pinned}
     for idx, n in enumerate(nodes):
         if n.pinned:
@@ -225,7 +249,7 @@ def _init_positions(nodes: list[Node], edges: list[Edge],
         # Deterministic golden-angle spread so identically-seeded supports fan
         # out instead of stacking (which would make repulsion start degenerate).
         ang = idx * 2.399963229728653  # golden angle (rad)
-        off = 3.81 + (idx % 5) * 1.27
+        off = (3.81 + (idx % 5) * 1.27) * spread
         n.x = target[0] + math.cos(ang) * off
         n.y = target[1] + math.sin(ang) * off
 
@@ -427,12 +451,13 @@ def simulate(nodes: list[Node], edges: list[Edge], cfg: SimConfig) -> SimResult:
     edges = sorted(edges, key=lambda e: e.net)
     by_ref = {n.ref: n for n in nodes}
 
-    _init_positions(nodes, edges, by_ref)
+    _init_positions(nodes, edges, by_ref, cfg.init_spread)
     ic = next((n for n in nodes if n.is_ic and n.pinned), None)
     vx = {n.ref: 0.0 for n in nodes}
     vy = {n.ref: 0.0 for n in nodes}
     frames: list[dict] = []
     trace_every = cfg.trace_every or max(1, cfg.iters // 200)
+    snap, grid = cfg.snap_grid, cfg.grid
 
     for it in range(cfg.iters):
         fx = {n.ref: 0.0 for n in nodes}
@@ -451,6 +476,12 @@ def simulate(nodes: list[Node], edges: list[Edge], cfg: SimConfig) -> SimResult:
             vy[n.ref] = _clamp((vy[n.ref] + fy[n.ref]) * _DAMP, vmax)
             n.x += vx[n.ref]
             n.y += vy[n.ref]
+            if snap:
+                # Quantize the position itself (not the velocity): forces keep
+                # accumulating continuously, but every captured/served frame —
+                # and the final read-out — sits exactly on the grid.
+                n.x = round(n.x / grid) * grid
+                n.y = round(n.y / grid) * grid
 
         if (cfg.reorient_every and it >= cfg.iters // 2
                 and it % cfg.reorient_every == 0):

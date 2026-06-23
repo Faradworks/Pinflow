@@ -60,6 +60,14 @@ import kicad_sch_api as ksa
 _GRID = 1.27          # rubric off_grid grid; pin offsets are 1.27-multiples
 _ROW_TOL = 2.54       # "meant to align" band, matching rubric._ROW_TOL
 
+# Default best-of-spread candidate set (init_spread, iters). The sweep showed no
+# single (spread, iters) is a corpus-wide Pareto win — the optimum is fixture-
+# dependent — but a rubric-picked max over these three captures most of the
+# per-fixture ceiling without regressing the tight-seed baseline. Wide spreads
+# are paired with extra iters: a wide start under-converges in the default 600
+# (tps61088 1.5/600 → gate FAIL 0.25; the same 2.0 at 1200 → best-in-row 0.85).
+BEST_OF_SPREADS: tuple[tuple[float, int], ...] = ((1.0, 600), (3.0, 600), (2.0, 1200))
+
 
 # --- graph construction (parts -> fdcore nodes/edges) ------------------------
 
@@ -507,7 +515,8 @@ def _prepare(netlist: Netlist, tree: LayoutTree, title: str):
 
 
 def _build_once(netlist: Netlist, tree: LayoutTree, title: str, wiring: str,
-                cfg: fdcore.SimConfig | None = None) -> PlacerResult:
+                cfg: fdcore.SimConfig | None = None,
+                stub: float | None = None) -> PlacerResult:
     plan = tree.plan
     anchor = tree.anchor
     cfg = cfg or fdcore.SimConfig()
@@ -533,7 +542,7 @@ def _build_once(netlist: Netlist, tree: LayoutTree, title: str, wiring: str,
 
     # ---- shared downstream (mirrors cplace._build_once) ----
     label_specs = _place_connectivity(sch, netlist, plan, placed_refs, issues,
-                                      wiring=wiring)
+                                      wiring=wiring, stub=stub)
     _place_no_connects(sch, netlist, placed_refs, issues)
     text = _hide_gnd_labels(sch_to_string(sch), netlist)
     text = _place_labels(text, sch, parts, anchor, label_specs, netlist)
@@ -542,13 +551,38 @@ def _build_once(netlist: Netlist, tree: LayoutTree, title: str, wiring: str,
                         placed_refs=placed_refs, label_specs=label_specs)
 
 
+def _place_single(netlist: Netlist, tree: LayoutTree, title: str,
+                  cfg: fdcore.SimConfig | None,
+                  stub: float | None) -> PlacerResult:
+    """One force-placed layout at `cfg`: route, falling back to label-only wiring
+    if the router corrupts topology (the same guard as cplace)."""
+    routed = _build_once(netlist, tree, title, "router", cfg=cfg, stub=stub)
+    if _topology_intact(netlist, routed):
+        return routed
+    fallback = _build_once(netlist, tree, title, "labels", cfg=cfg, stub=stub)
+    fallback.issues.append(
+        "router output failed the connectivity check — fell back to "
+        "label-only wiring"
+    )
+    return fallback
+
+
 def fdplace(netlist: Netlist, *, title: str = "Subcircuit",
             tree: LayoutTree | None = None,
-            cfg: fdcore.SimConfig | None = None) -> PlacerResult:
+            cfg: fdcore.SimConfig | None = None,
+            stub: float | None = None) -> PlacerResult:
     """Force-directed placer entry point. Single-IC scope (v1); zero/multi-IC
     defers to the legacy column placer. Wires with the crossing-minimising
-    router, falling back to label-only wiring if the router corrupts topology —
-    the same guard as cplace."""
+    router (each pin left by a colinear `stub` mm stub; None ⇒ the default),
+    falling back to label-only wiring if the router corrupts topology — the
+    same guard as cplace.
+
+    Single-shot by default. When `cfg.best_of` is set (a tuple of
+    `(init_spread, iters)` candidates), places each candidate and keeps the
+    highest rubric-scoring result — a max that can never regress the single-shot
+    baseline. The seeding optimum is fixture-dependent (see `BEST_OF_SPREADS`),
+    so this trades ~Nx placement time (fdplace is sub-second) for the per-fixture
+    ceiling instead of betting on one global spread."""
     errors = netlist.validate_self()
     if errors:
         raise PlacerError(errors)
@@ -557,15 +591,35 @@ def fdplace(netlist: Netlist, *, title: str = "Subcircuit",
     if tree.anchor is None:
         return place(netlist, title=title)
 
-    routed = _build_once(netlist, tree, title, "router", cfg=cfg)
-    if _topology_intact(netlist, routed):
-        return routed
-    fallback = _build_once(netlist, tree, title, "labels", cfg=cfg)
-    fallback.issues.append(
-        "router output failed the connectivity check — fell back to "
-        "label-only wiring"
-    )
-    return fallback
+    cfg = cfg or fdcore.SimConfig()
+    if not cfg.best_of:
+        return _place_single(netlist, tree, title, cfg, stub)
+
+    # Best-of-spread: place each candidate, rubric-score it, keep the best. The
+    # rubric import is local so the single-shot path never pulls it in. Strict
+    # `>` keeps the earliest candidate on an exact tie, so the choice — and thus
+    # the emitted bytes — stays deterministic (candidate order is fixed).
+    from dataclasses import replace
+    from pinflow_api.emit.rubric import score
+
+    best: PlacerResult | None = None
+    best_total = -1.0
+    best_label = ""
+    for spread, iters in cfg.best_of:
+        cand_cfg = replace(cfg, init_spread=spread, iters=iters, best_of=())
+        try:
+            res = _place_single(netlist, tree, title, cand_cfg, stub)
+        except PlacerError:
+            continue
+        total = score(res.sch_text, netlist).total
+        if total > best_total:
+            best, best_total = res, total
+            best_label = f"spread={spread:g} iters={iters} → {total:.3f}"
+    if best is None:
+        # Every candidate raised — degrade to a plain single-shot at base cfg.
+        return _place_single(netlist, tree, title, replace(cfg, best_of=()), stub)
+    best.issues.append(f"best-of-{len(cfg.best_of)}: chose {best_label}")
+    return best
 
 
 def trace_layout(netlist: Netlist, *, title: str = "Subcircuit",
@@ -582,13 +636,28 @@ def trace_layout(netlist: Netlist, *, title: str = "Subcircuit",
         raise PlacerError(["trace_layout requires a single-IC netlist"])
     base = cfg or fdcore.SimConfig()
     cfg = fdcore.SimConfig(gains=base.gains, iters=base.iters, seed=base.seed,
-                           margin=base.margin, grid=base.grid, trace=True,
+                           margin=base.margin, grid=base.grid,
+                           init_spread=base.init_spread,
+                           snap_grid=base.snap_grid, trace=True,
                            reorient_every=base.reorient_every)
 
     _, _, _, parts, nodes, edges = _prepare(netlist, tree, title)
     result = fdcore.simulate(nodes, edges, cfg)
-    snapped = _finalize_positions(result, tree, parts, tree.anchor, nodes,
-                                  cfg.margin)
+    anchor = tree.anchor
+    snapped = _finalize_positions(result, tree, parts, anchor, nodes, cfg.margin)
+
+    # Attach the *finalized* layout for every frame, so the viewer can animate
+    # the actual placed result (grid + structural group snaps: divider stacks,
+    # even-pitch cap banks, de-cram, anti-stack) converging — not just the raw
+    # force positions. `_finalize_positions` is pure (operates on a copied dict),
+    # so this is display-only: it never touches the sim, the placer, or the
+    # rubric. The last frame's `snapped` equals the top-level `snapped`.
+    for fr in result.frames:
+        fpos = {nd["ref"]: (nd["x"], nd["y"]) for nd in fr["nodes"]}
+        fr_result = fdcore.SimResult(positions=fpos, rotations={}, frames=[])
+        fin = _finalize_positions(fr_result, tree, parts, anchor, nodes, cfg.margin)
+        fr["snapped"] = {k: [round(v[0], 3), round(v[1], 3)]
+                         for k, v in fin.items()}
 
     return {
         "name": title,

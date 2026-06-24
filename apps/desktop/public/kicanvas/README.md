@@ -1,14 +1,14 @@
 # Vendored KiCanvas bundle
 
-`kicanvas.js` is the upstream KiCanvas bundle with one small in-place patch.
-Don't hand-edit beyond that — refresh by re-downloading and re-applying the
-patch via `apply-patches.sh`.
+`kicanvas.js` is the upstream KiCanvas bundle with a few small in-place patches.
+Don't hand-edit beyond those — refresh by re-downloading and re-applying the
+patches via `apply-patches.sh`.
 
 - Upstream: https://kicanvas.org/kicanvas/kicanvas.js
 - Project: https://github.com/theacodes/kicanvas (MIT, (c) Alethea Katherine Flowers)
 - Upstream fetched: 2026-05-13
 - Upstream sha256: `ca910f25276c3efb9aacb3a5d6341d4d9af4736d4c875fb0440d2cc856865ab7`
-- Patched sha256:  `f2feb36c2b3565ad83317723945ce7afcccf4284ab37903dea501c749673abad`
+- Patched sha256:  `5242e38d6faee43433118570950d9ce34cee8566d46e6c57cc9266717e918083`
 
 Refresh + re-patch (from repo root):
 
@@ -71,6 +71,16 @@ on modern files anyway.
 
 Find: `this.get_property_text("Value")==null&&this.set_property_text("Value",this.default_instance.value),!this.get_property_text("Footprint")==null&&this.set_property_text("Footprint",this.default_instance.footprint)`
 Replace with: `this.get_property_text("Value")==null&&this.default_instance&&this.set_property_text("Value",this.default_instance.value),!this.get_property_text("Footprint")==null&&this.default_instance&&this.set_property_text("Footprint",this.default_instance.footprint)`
+
+### 4. Remove the "Help" activity from the viewer side-bar
+
+`make_post_activities()` builds the bottom side-bar activities and returns
+`[Preferences, Help]`. The Help panel is upstream KiCanvas branding/help that
+adds nothing in an embedded context, and unlike the top-toolbar download button
+(disabled via `controlslist="nodownload"` in `SchematicView.tsx`) there's no
+flag to turn it off — so the patch drops the second array element, leaving
+Preferences. See the full multi-line find/replace strings in `apply-patches.sh`
+(patch #4).
 
 The bundle is loaded via `<script type="module" src="/kicanvas/kicanvas.js">` from `apps/desktop/index.html` (Vite serves `public/` at the root). It registers `<kicanvas-embed>` and `<kicanvas-source>` as global custom elements; see `apps/desktop/src/components/schematic/SchematicView.tsx`.
 

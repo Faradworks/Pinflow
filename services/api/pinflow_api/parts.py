@@ -45,6 +45,15 @@ def search_by_mpn(mpn: str, limit: int = 8) -> list[dict]:
     return parts_client.search_by_mpn(mpn, limit)
 
 
+def search_by_mpn_batch(mpns: list[str]) -> dict[str, list[dict]]:
+    """Batch exact MPN → LCSC lookup, keyed by each raw input MPN. {} when
+    unavailable so callers fall back to per-MPN `search_by_mpn` (prefix
+    matching). Folds a resolver's N reverse lookups into one round trip."""
+    if not parts_client.is_available():
+        return {}
+    return parts_client.search_by_mpn_batch(mpns)
+
+
 def fetch_datasheet_pdf(
     mpn: str,
     *,
@@ -102,6 +111,27 @@ def fetch_datasheet_pdf(
         if pdf is not None:
             return pdf
     return None
+
+
+def search_passive(
+    kind: str,
+    value: str,
+    *,
+    package: Optional[str] = None,
+    max_tolerance_pct: Optional[float] = None,
+    require_stock: bool = True,
+    limit: int = 10,
+) -> list[dict]:
+    """Structured passive lookup (R/C/L by value). [] when unavailable, so the
+    caller falls back to keyword search. Deterministic value match — the right
+    path for passives, avoiding the keyword tokenization misses on values."""
+    if not parts_client.is_available():
+        return []
+    return parts_client.search_passive(
+        kind, value,
+        package=package, max_tolerance_pct=max_tolerance_pct,
+        require_stock=require_stock, limit=limit,
+    )
 
 
 def search_keyword(

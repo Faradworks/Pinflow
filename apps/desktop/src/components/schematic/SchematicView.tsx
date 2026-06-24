@@ -73,8 +73,12 @@ function KicanvasViewer({ source }: { source: string }) {
   // clicking a component has nowhere to surface its properties. The embed
   // hardcodes `sidebarcollapsed`, so the panel stays hidden until the schematic
   // app's on_viewer_select fires change_activity("properties") on a click.
+  // `controlslist="nodownload"` drops the top-toolbar download button (it has no
+  // backing filesystem for an inline source, so it did nothing). The Help activity
+  // in the side-bar has no such flag — it's removed via a bundle patch (see
+  // public/kicanvas/apply-patches.sh #4).
   return (
-    <kicanvas-embed key={fingerprint(source)} controls="full">
+    <kicanvas-embed key={fingerprint(source)} controls="full" controlslist="nodownload">
       <kicanvas-source type="schematic">{source}</kicanvas-source>
     </kicanvas-embed>
   );

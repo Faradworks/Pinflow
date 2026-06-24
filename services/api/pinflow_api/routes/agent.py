@@ -67,6 +67,10 @@ class ResumeBody(BaseModel):
     attachment_ids: Optional[list[str]] = None
 
 
+class CancelBody(BaseModel):
+    conversation_id: str
+
+
 def _new_conversation_id() -> str:
     return "c_" + uuid.uuid4().hex[:12]
 
@@ -112,6 +116,23 @@ def chat_resume(body: ResumeBody, request: Request):
             fh.close()
 
     return StreamingResponse(gen(), media_type="text/event-stream")
+
+
+@router.post("/cancel")
+def cancel(body: CancelBody):
+    """Cooperatively stop an in-flight drive. Sets the conversation's cancel
+    flag; the running `_drive` loop checks it at its next safe checkpoint and
+    winds down (emitting a `system` + `done`), leaving `messages` resumable.
+
+    Takes no LLM headers on purpose — it makes no model call, just sets a flag,
+    so it behaves identically for the cloud and BYOK providers. A no-op (clean
+    200) when the conversation is unknown or already idle.
+    """
+    state = st.get(body.conversation_id)
+    if state is None:
+        return {"cancelled": False}
+    state.cancel_event.set()
+    return {"cancelled": True}
 
 
 @router.post("/attachments")

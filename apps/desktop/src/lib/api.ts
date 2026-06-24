@@ -236,6 +236,16 @@ export const api = {
     );
   },
 
+  /** Cooperatively stop an in-flight drive. The backend sets a flag the running
+   *  loop checks at its next safe checkpoint, then winds down (emitting its own
+   *  `system` + `done` over the still-open stream). Not routed through any LLM
+   *  provider, so it works the same for cloud and BYOK. */
+  async cancelChat(conversationId: string): Promise<{ cancelled: boolean }> {
+    return post<{ cancelled: boolean }>("/agent/cancel", {
+      conversation_id: conversationId,
+    });
+  },
+
   // --- Pinflow Cloud login (always targets the local service) ---------------
   async startCloudLogin(): Promise<{ state: string; login_url: string; opened: boolean }> {
     const r = await fetch(`${getApiBase()}/auth/start`, {

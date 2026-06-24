@@ -44,6 +44,33 @@ patches = [
         'this.get_property_text("Value")==null&&this.set_property_text("Value",this.default_instance.value),!this.get_property_text("Footprint")==null&&this.set_property_text("Footprint",this.default_instance.footprint)',
         'this.get_property_text("Value")==null&&this.default_instance&&this.set_property_text("Value",this.default_instance.value),!this.get_property_text("Footprint")==null&&this.default_instance&&this.set_property_text("Footprint",this.default_instance.footprint)',
     ),
+    # 4. Drop the "Help" activity from the viewer side-bar. make_post_activities()
+    #    returns [Preferences, Help]; the Help panel is upstream-branding noise in
+    #    an embedded context and has no controlslist flag to disable it (unlike the
+    #    download button, which we turn off via controlslist="nodownload"). Remove
+    #    the second array element, leaving Preferences.
+    (
+        'make_post_activities(){return[f`<kc-ui-activity\n'
+        '                slot="activities"\n'
+        '                name="Preferences"\n'
+        '                icon="settings"\n'
+        '                button-location="bottom">\n'
+        '                <kc-preferences-panel></kc-preferences-panel>\n'
+        '            </kc-ui-activity>`,f` <kc-ui-activity\n'
+        '                slot="activities"\n'
+        '                name="Help"\n'
+        '                icon="help"\n'
+        '                button-location="bottom">\n'
+        '                <kc-help-panel></kc-help-panel>\n'
+        '            </kc-ui-activity>`]}',
+        'make_post_activities(){return[f`<kc-ui-activity\n'
+        '                slot="activities"\n'
+        '                name="Preferences"\n'
+        '                icon="settings"\n'
+        '                button-location="bottom">\n'
+        '                <kc-preferences-panel></kc-preferences-panel>\n'
+        '            </kc-ui-activity>`]}',
+    ),
 ]
 applied = []
 for i, (old, new) in enumerate(patches, start=1):

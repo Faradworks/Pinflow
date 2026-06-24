@@ -166,6 +166,43 @@ def search_by_mpn(mpn: str, limit: int = 8) -> list[dict]:
     return [_part_to_candidate(p) for p in results]
 
 
+def search_by_mpn_batch(mpns: list[str]) -> dict[str, list[dict]]:
+    """Batch EXACT MPN → LCSC candidates via `POST /v1/parts/by-mpn/batch`.
+
+    Keyed by each raw input MPN; an empty list for a miss. Returns {} on any
+    HTTP failure so the caller can fall back to per-MPN `search_by_mpn` (which
+    does prefix matching, not just exact). Same 8-key candidate dict shape.
+
+    This folds a resolver's N reverse lookups into one round trip (and one
+    gateway rate-limit hit) instead of N sequential GETs through the
+    gateway → purple-parts chain. Exact match only — the single endpoint's
+    prefix arm is intentionally left to the per-seed fallback.
+    """
+    needles = [m for m in (mpns or []) if (m or "").strip()]
+    if not needles:
+        return {}
+
+    client = _get_client()
+    if client is None:
+        return {}
+    try:
+        r = client.post(
+            "/v1/parts/by-mpn/batch",
+            json={"mpns": needles},
+            headers=_request_headers(),
+        )
+        if r.status_code != 200:
+            return {}
+        results = r.json().get("results") or {}
+    except Exception:
+        return {}
+
+    return {
+        raw: [_part_to_candidate(p) for p in (cands or [])]
+        for raw, cands in results.items()
+    }
+
+
 def fetch_datasheet_pdf(
     mpn: str,
     *,
@@ -254,6 +291,58 @@ def search_keyword(
     try:
         r = client.get(
             "/v1/parts/search",
+            params=params,
+            headers=_request_headers(),
+        )
+        if r.status_code != 200:
+            return []
+        results = r.json().get("results") or []
+    except Exception:
+        return []
+
+    return [_part_to_candidate(p) for p in results]
+
+
+def search_passive(
+    kind: str,
+    value: str,
+    *,
+    package: Optional[str] = None,
+    max_tolerance_pct: Optional[float] = None,
+    require_stock: bool = True,
+    limit: int = 10,
+) -> list[dict]:
+    """Structured passive lookup via `GET /v1/parts/passive`.
+
+    Deterministic value match for resistors / capacitors / inductors (`kind` =
+    R/C/L), the right tool for passives instead of keyword search — fast and
+    immune to the description-tokenization misses. `value` is the schematic
+    value string ("10k", "100nF", "4.7uH"); the service parses it. Returns the
+    8-key candidate dict shape; [] on any HTTP failure.
+    """
+    k = (kind or "").strip()
+    v = (value or "").strip()
+    if not k or not v:
+        return []
+
+    client = _get_client()
+    if client is None:
+        return []
+
+    params: dict = {
+        "kind": k,
+        "value": v,
+        "limit": int(limit),
+        "require_stock": "true" if require_stock else "false",
+    }
+    if package:
+        params["package"] = package
+    if max_tolerance_pct is not None:
+        params["max_tolerance_pct"] = max_tolerance_pct
+
+    try:
+        r = client.get(
+            "/v1/parts/passive",
             params=params,
             headers=_request_headers(),
         )

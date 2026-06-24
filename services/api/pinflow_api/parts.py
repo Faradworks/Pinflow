@@ -113,6 +113,27 @@ def fetch_datasheet_pdf(
     return None
 
 
+def search_passive(
+    kind: str,
+    value: str,
+    *,
+    package: Optional[str] = None,
+    max_tolerance_pct: Optional[float] = None,
+    require_stock: bool = True,
+    limit: int = 10,
+) -> list[dict]:
+    """Structured passive lookup (R/C/L by value). [] when unavailable, so the
+    caller falls back to keyword search. Deterministic value match — the right
+    path for passives, avoiding the keyword tokenization misses on values."""
+    if not parts_client.is_available():
+        return []
+    return parts_client.search_passive(
+        kind, value,
+        package=package, max_tolerance_pct=max_tolerance_pct,
+        require_stock=require_stock, limit=limit,
+    )
+
+
 def search_keyword(
     query: str,
     *,

@@ -351,20 +351,45 @@ def run(state, refdeses: Optional[list] = None, **_inputs) -> dict:
                     "note": "keyword search needs the parts catalogue (unavailable)",
                 })
                 continue
-            cands = parts_facade.search_keyword(
-                query,
-                limit=25,
-                require_stock=True,
-                package=_package_hint(footprint),
-            )
-            cands = _derate(cands, np.get("min_voltage"))
-            # Reject candidates that aren't the same component class + value
-            # (the keyword ranker is loose for passives). Honest no_match
-            # beats a 22Ω resistor stamped onto a 22µF cap.
-            typed = [c for c in cands if _value_ok(value, lib_id, c)]
-            pick = typed[0] if typed else None
+            # Passives (R/C/L) are a structured lookup, not a search problem:
+            # match the exact value on the catalogue's normalized columns. Faster
+            # and more accurate than keyword search, which misses standard values
+            # because "10kΩ" never tokenizes to "10k"/"ohm". The server already
+            # matched value + package + class, so trust the pick (don't re-run
+            # _value_ok, whose description-parse can reject a blank-description
+            # part the structured match got right); still derate by voltage.
+            letter = _letter(lib_id)
+            if letter in ("R", "C", "L") and value:
+                pcands = parts_facade.search_passive(
+                    letter, value,
+                    package=_package_hint(footprint),
+                    require_stock=True, limit=10,
+                )
+                pcands = _derate(pcands, np.get("min_voltage"))
+                if pcands:
+                    pick = pcands[0]
+                    mode = "passive"
+                    detail = value
 
-        detail_key = "query" if mode == "keyword" else "mpn_seed"
+            if pick is None:
+                # Keyword fallback: non-passives, or a passive the structured
+                # path couldn't resolve.
+                cands = parts_facade.search_keyword(
+                    query,
+                    limit=25,
+                    require_stock=True,
+                    package=_package_hint(footprint),
+                )
+                cands = _derate(cands, np.get("min_voltage"))
+                # Reject candidates that aren't the same component class + value
+                # (the keyword ranker is loose for passives). Honest no_match
+                # beats a 22Ω resistor stamped onto a 22µF cap.
+                typed = [c for c in cands if _value_ok(value, lib_id, c)]
+                pick = typed[0] if typed else None
+
+        detail_key = {"keyword": "query", "passive": "value", "mpn": "mpn_seed"}.get(
+            mode, "mpn_seed"
+        )
 
         if pick is None:
             unmatched.append(ref)

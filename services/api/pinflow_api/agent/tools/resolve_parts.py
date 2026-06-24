@@ -271,6 +271,33 @@ def run(state, refdeses: Optional[list] = None, **_inputs) -> dict:
         p.get("refdes"): p for p in sn.get("parts", []) if p.get("refdes")
     }
 
+    # First pass: gather MPN seeds for every in-scope component so the MPN→LCSC
+    # lookups fold into one batch (exact-match) call instead of one HTTP round
+    # trip per seed through the gateway → purple-parts chain. The per-seed prefix
+    # fallback below still runs for any seed without an exact hit.
+    seeds_by_ref: dict[str, list[str]] = {}
+    for comp in sch.components:
+        ref = getattr(comp, "reference", None)
+        lib_id = getattr(comp, "lib_id", "") or ""
+        if not ref or lib_id.startswith("power:"):
+            continue
+        if only is not None and ref not in only:
+            continue
+        if _first_prop(comp, _LCSC_KEYS):
+            continue  # already orderable
+        np = np_by_ref.get(ref) or {}
+        s = _seeds(
+            _first_prop(comp, _MPN_KEYS),
+            (np.get("mpn") or "").strip(),
+            (getattr(comp, "value", "") or "").strip(),
+            lib_id,
+        )
+        if s:
+            seeds_by_ref[ref] = s
+
+    all_seeds = sorted({x for seeds in seeds_by_ref.values() for x in seeds})
+    mpn_batch = parts_facade.search_by_mpn_batch(all_seeds) if all_seeds else {}
+
     resolved: list[dict] = []
     unmatched: list[str] = []
     updates: dict[str, dict[str, str]] = {}
@@ -283,7 +310,6 @@ def run(state, refdeses: Optional[list] = None, **_inputs) -> dict:
         if only is not None and ref not in only:
             continue
 
-        existing_mpn = _first_prop(comp, _MPN_KEYS)
         existing_lcsc = _first_prop(comp, _LCSC_KEYS)
         if existing_lcsc:
             continue  # already orderable
@@ -291,16 +317,21 @@ def run(state, refdeses: Optional[list] = None, **_inputs) -> dict:
         value = (getattr(comp, "value", "") or "").strip()
         footprint = getattr(comp, "footprint", "") or ""
         np = np_by_ref.get(ref) or {}
-        np_mpn = (np.get("mpn") or "").strip()
 
-        seeds = _seeds(existing_mpn, np_mpn, value, lib_id)
+        seeds = seeds_by_ref.get(ref, [])
         pick: Optional[dict] = None
 
         if seeds:
             mode = "mpn"
             detail = seeds[0]
             for s in seeds:
-                cands = parts_facade.search_by_mpn(s, limit=8)
+                # Exact matches from the single batch call; fall back to the
+                # per-MPN endpoint (prefix matching) only when there's no exact
+                # hit, so a canonical family like "TPS62840" still resolves to
+                # an orderable "TPS62840DLCR".
+                cands = mpn_batch.get(s)
+                if not cands:
+                    cands = parts_facade.search_by_mpn(s, limit=8)
                 if cands:
                     pick = cands[0]
                     detail = s

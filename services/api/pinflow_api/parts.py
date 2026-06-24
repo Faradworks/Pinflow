@@ -45,6 +45,15 @@ def search_by_mpn(mpn: str, limit: int = 8) -> list[dict]:
     return parts_client.search_by_mpn(mpn, limit)
 
 
+def search_by_mpn_batch(mpns: list[str]) -> dict[str, list[dict]]:
+    """Batch exact MPN → LCSC lookup, keyed by each raw input MPN. {} when
+    unavailable so callers fall back to per-MPN `search_by_mpn` (prefix
+    matching). Folds a resolver's N reverse lookups into one round trip."""
+    if not parts_client.is_available():
+        return {}
+    return parts_client.search_by_mpn_batch(mpns)
+
+
 def fetch_datasheet_pdf(
     mpn: str,
     *,

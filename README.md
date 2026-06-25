@@ -2,41 +2,49 @@
 
 <img width="1728" height="1080" alt="pinflow_demo" src="https://github.com/user-attachments/assets/a4d0c2b5-c5ab-4c65-bda8-a286172da16c" />
 
+Pinflow is an open-source AI assistant for schematic design in [KiCad](https://www.kicad.org/). It pairs a chat-driven agent with a live schematic view, helping you draft subcircuits and pick real, orderable parts without leaving your workflow.
 
-An open-source agentic assistant for electronics design — automating the tedious
-parts of schematic capture, layout, and component selection so engineers can
-focus on design intent.
+> Note: Pinflow works on schematics. It does not do PCB layout or routing.
 
-## Vision
+## What it does
 
-Pinflow is an AI-native co-designer for hardware engineers. It works as a
-companion to [KiCad](https://www.kicad.org/) — where designers already are —
-with a chat-driven agent on one side and a live schematic view on the other.
+The desktop app is a chat workspace: the conversation on the left, a live [KiCanvas](https://kicanvas.org/) schematic viewer on the right. The agent can:
 
-## What it does today
+- Read the KiCad schematic you have open.
+- Draft and place subcircuits from a plain-language description.
+- Resolve real, orderable parts with the correct pinout and footprint.
+- Stage every edit for review. Nothing is written to your files until you accept it.
 
-The desktop app is a chat-driven agent shell: the conversation on the left, a
-live KiCanvas schematic viewer on the right. You talk to an agent that can read
-your open KiCad schematic, draft and place subcircuits, resolve real orderable
-parts, and **stage** edits for you to review before they touch your files. Many
-tools are still being filled in.
+Pinflow is under active development, and more agent tools are being added.
 
-## Planned capabilities
+## Install on macOS
 
-- **Auto schematic generation** — describe a subsystem or drop a datasheet, and
-  Pinflow drafts the subcircuit with sensible part choices, decoupling, and net
-  naming.
-- **Component placement & routing** — agentic placement that respects
-  analog/digital separation and signal integrity.
-- **Component intelligence** — pin-aware part lookup, footprint checks, and
-  context-aware alternatives.
-- **Design-rule + intent reasoning** — catch issues a linter can't, by
-  understanding what the circuit is *trying* to do.
+Download the latest build from the [Releases page](https://github.com/Faradworks/Pinflow/releases):
 
-## Quick start
+- Apple Silicon (M1 and newer): `Pinflow_<version>_aarch64.dmg`
+- Intel: `Pinflow_<version>_x64.dmg`
 
-**Prerequisites:** KiCad 10, Python 3.10+, Node.js, Rust (for Tauri), and
-[`uv`](https://github.com/astral-sh/uv).
+Open the `.dmg` and drag Pinflow into your Applications folder. If macOS reports that the app cannot be verified, right-click it and choose Open, or run:
+
+```bash
+xattr -dr com.apple.quarantine /Applications/Pinflow.app
+```
+
+On first launch, enter your Anthropic API key in the onboarding screen (see [Bring your own key](#bring-your-own-key) below).
+
+## Bring your own key
+
+Pinflow runs entirely on your own Anthropic API key. The BYOK build is the complete product. Enter your key on first launch, or set it in `services/api/.env`:
+
+```
+ANTHROPIC_API_KEY=sk-ant-...
+```
+
+Pinflow Cloud is an optional hosted add-on (managed key plus a parts catalogue) that you can sign into from inside the app. It is a convenience layer on top of the open-source app, not a requirement.
+
+## Build from source
+
+Prerequisites: KiCad 10, Python 3.10+, Node.js, Rust (for Tauri), and [`uv`](https://github.com/astral-sh/uv).
 
 ```bash
 # Backend (FastAPI service)
@@ -48,41 +56,29 @@ cd ../../apps/desktop
 npm install
 ```
 
-**Bring your own key (BYOK).** Pinflow runs entirely on your own Anthropic API
-key — the BYOK build is the complete product. Either enter your key in the app's
-first-run onboarding screen, or set it in `services/api/.env`:
-
-```
-ANTHROPIC_API_KEY=sk-ant-...
-```
-
-Then boot the app (starts the FastAPI service + the Tauri desktop shell):
+Boot the app, which starts the FastAPI service and the Tauri desktop shell:
 
 ```bash
 ./scripts/dev.sh
 ```
 
-Optionally, **Pinflow Cloud** is a hosted, managed-key + parts-catalogue add-on
-you can sign into from within the app — but it's just a convenience on top of
-the open-source app.
+## How it connects to KiCad
 
-## Integrations
+Pinflow reads the project you have open and stages schematic edits for you to review. Nothing is written to your files without an explicit accept. A standalone path supports headless use and users who are not working in KiCad.
 
-- **KiCad** — reads your open project and stages schematic edits you review
-  before committing. Nothing is written to your files without an explicit
-  accept.
-- **Standalone** — a path for headless use and for users not in KiCad.
+## Roadmap
+
+- Datasheet to subcircuit: drop in a datasheet and have Pinflow draft the subcircuit with sensible part choices, decoupling, and net naming.
+- Deeper part intelligence: pin-aware lookup, footprint checks, and context-aware alternatives.
+- Design intent checks: catch issues a linter cannot, by reasoning about what the circuit is trying to do.
 
 ## Development
 
-Build and run steps are in [Quick start](#quick-start) above. When the agent
-misbehaves on a prompt, `services/api/scripts/trace_chat.py` runs the loop
-in-process with a full-fidelity trace tap (every prompt, response, and complete
-tool input/output); run it with `--help` for usage.
+Build and run steps are in [Build from source](#build-from-source) above. When the agent misbehaves on a prompt, `services/api/scripts/trace_chat.py` runs the loop in-process with a full-fidelity trace tap that records every prompt, response, and complete tool input and output. Run it with `--help` for usage.
 
 ## Contributing
 
-Contributions are welcome! See [`CONTRIBUTING.md`](./CONTRIBUTING.md).
+Contributions are welcome. See [`CONTRIBUTING.md`](./CONTRIBUTING.md).
 
 ## License
 

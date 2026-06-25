@@ -1,5 +1,8 @@
 # Pinflow
 
+<img width="1728" height="1080" alt="pinflow_demo" src="https://github.com/user-attachments/assets/a4d0c2b5-c5ab-4c65-bda8-a286172da16c" />
+
+
 An open-source agentic assistant for electronics design — automating the tedious
 parts of schematic capture, layout, and component selection so engineers can
 focus on design intent.
